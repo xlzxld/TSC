@@ -214,6 +214,55 @@ class LegacyMigrationTests(unittest.TestCase):
         self.assertFalse((self.tmp / "enforcement").exists())
 
 
+class SourceRecordTests(unittest.TestCase):
+    """回归（v3.1.2 A-02/A-04）：.source 必须始终记录本次实际使用的上游。"""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="tsc-src-"))
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+
+    def _make_old_upstream(self, root):
+        root.mkdir(parents=True)
+        (root / "AGENTS.md").write_text(AGENTS_SAMPLE, encoding="utf-8")
+        (root / "VERSION").write_text("3.0.0\n", encoding="utf-8")
+        agents = root / ".agents"
+        agents.mkdir()
+        (agents / "project.example.py").write_text("TEST_CMD = None\n", encoding="utf-8")
+        return root
+
+    def test_explicit_from_repoints_source(self):
+        # 显式 --from 新上游成功后，.source 必须跟着换；否则下次裸 sync 会静默降级回旧上游
+        old = self._make_old_upstream(self.tmp / "old-skill")
+        proj = self.tmp / "proj"
+        proj.mkdir()
+        code, out = run_script("install", "--from", str(old), "--project", str(proj))
+        self.assertEqual(code, 0, out)
+        self.assertEqual(tsc.read_text(proj / ".agents" / ".source").strip(), str(old))
+        code, out = run_script("sync", "--from", str(REPO), "--project", str(proj))
+        self.assertEqual(code, 0, out)
+        self.assertEqual(tsc.read_text(proj / ".agents" / ".source").strip(), str(REPO))
+        # 换源后裸 sync 不得静默降级：上游=本仓库、版本同、执法包已对齐 → 应早退，
+        # 且 VERSION 保持本仓库版本（修复前会回落到旧上游的 3.0.0）
+        code, out = run_script("sync", "--project", str(proj))
+        self.assertEqual(code, 0, out)
+        self.assertIn("已是最新", out)
+        self.assertEqual(
+            tsc.read_text(proj / ".agents" / "VERSION").strip(),
+            tsc.upstream_version(REPO),
+        )
+
+    def test_empty_source_gets_rewritten(self):
+        # 空的 .source 既不算缺失也不算死路径，旧版永远不会补写——现在必须回填
+        proj = self.tmp / "proj"
+        proj.mkdir()
+        code, out = run_script("install", "--from", str(REPO), "--project", str(proj))
+        self.assertEqual(code, 0, out)
+        (proj / ".agents" / ".source").write_text("", encoding="utf-8")
+        code, out = run_script("sync", "--project", str(proj))
+        self.assertEqual(code, 0, out)
+        self.assertEqual(tsc.read_text(proj / ".agents" / ".source").strip(), str(REPO))
+
+
 class InstallSyncE2ETests(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp(prefix="tsc-e2e-"))

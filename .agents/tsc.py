@@ -233,15 +233,16 @@ def find_upstream(explicit, proj_root):
     return script_dir().parent  # 技能/母版自举：脚本上一级即上游根
 
 
-def source_record_dead(proj_root):
-    """项目 .agents/.source 记录的路径是否已失效（存在且非空且校验不过）。"""
+def source_record_current(proj_root, upstream):
+    """项目 .agents/.source 是否已记录为当前上游。
+
+    缺失、空文件、死路径、指向别的有效上游（显式 --from 换过源）都算"未记录当前"，
+    do_apply 会把它重写为本次实际使用的上游——否则下次裸 sync 会静默回到旧上游。
+    """
     source_file = Path(proj_root) / AGENTS_DIR / SOURCE_FILE
     if not source_file.is_file():
         return False
-    recorded = read_text(source_file).strip()
-    if not recorded:
-        return False
-    return bool(validate_upstream(Path(recorded).expanduser().resolve()))
+    return read_text(source_file).strip() == str(upstream)
 
 
 def validate_upstream(root):
@@ -535,7 +536,7 @@ def do_apply(proj_root, upstream, dry_run, force):
         if (
             not enforce_pending
             and not legacy_pending
-            and not source_record_dead(proj_root)
+            and source_record_current(proj_root, upstream)
         ):
             say("已是最新：本项目已是 v%s，无需变动。" % local_ver)
             return EXIT_OK
@@ -569,8 +570,9 @@ def do_apply(proj_root, upstream, dry_run, force):
         project_py = agents_dir / PROJECT_FILE
         source_file = agents_dir / SOURCE_FILE
         need_project_py = example.is_file() and not project_py.is_file()
-        # .source 缺失或记录已失效（技能目录搬家）都以本次实际使用的上游为准写入/修正
-        need_source = not source_file.is_file() or source_record_dead(proj_root)
+        # .source 未记录当前上游（缺失 / 空文件 / 死路径 / 显式 --from 换过源）
+        # 都以本次实际使用的上游为准写入/修正，防止下次裸 sync 静默回到旧上游
+        need_source = not source_record_current(proj_root, upstream)
         # dry-run 也要计入预览（旧版漏报这两个文件，且汇报路径缺 .agents/ 前缀）
         if need_project_py:
             changed.append((Path(AGENTS_DIR) / PROJECT_FILE).as_posix())
