@@ -307,7 +307,7 @@ def collect_payload(upstream):
 
 
 def section2_value(block, row_prefix):
-    """从 §2 表格取某一行第 3 列（验证条件列之前的那列取值）。找不到返回 None。"""
+    """从 §2 表格取某一行「命令 / 取值」列（第 2 列）的值。找不到返回 None。"""
     if not block:
         return None
     for line in block.split("\n"):
@@ -377,7 +377,6 @@ def _enforce_actions(proj_root, upstream, merged_agents_text):
             continue
 
         skip.append((rel_dst, "内容已被项目改过"))
-        continue
 
     return deploy, update, skip
 
@@ -489,7 +488,7 @@ def do_apply(proj_root, upstream, dry_run, force):
             if not source_file.is_file():
                 write_version(source_file, str(upstream))
                 changed.append(SOURCE_FILE)
-        write_version(proj_root / AGENTS_DIR / VERSION_FILE, up_ver or "", dry_run)
+        # VERSION 已随 collect_payload 的载荷循环写入，这里不再重复写
 
         # 执法包模板落盘（gate.yml 的分支名跟随 §2；归属由 tsc-managed 标记决定）
         deployed, enforced_updated, enforced_skipped = deploy_enforcement(
@@ -586,6 +585,7 @@ def cmd_verify(proj_root):
     if cfg is None:
         return EXIT_STATE
 
+    ran = 0
     for label, key in STEPS:
         command = cfg.get(key)
         if command in (None, "", "skip"):
@@ -594,10 +594,20 @@ def cmd_verify(proj_root):
         say("$ %s" % command)
         completed = subprocess.run(command, shell=True, cwd=str(proj_root))
         code = completed.returncode
+        if code < 0:
+            # POSIX 下命令被信号杀死时 returncode 为负，负数退出码语义未定义
+            warn("%s 被信号杀死（信号 %d），按 IO/执行错误处理。" % (label, -code))
+            code = EXIT_IO
+        ran += 1
         say("  退出码：%d" % code)
         if code != 0:
             warn("%s 未通过，停在此处。门禁结论：失败（退出码 %d）" % (label, code))
             return code
+    if ran == 0:
+        warn("四条门禁命令均未配置，本次没有真正执行任何检查——这个\"全绿\"是假绿。")
+        warn("请编辑 .agents/project.py 填入真实命令（AGENTS.md §2 与之同步）。")
+        say("门禁结论：无可执行项（假绿，退出码 0）")
+        return EXIT_OK
     say("门禁结论：全绿（退出码 0）")
     return EXIT_OK
 
@@ -652,6 +662,10 @@ def cmd_check_config(proj_root):
 
     mismatch = []
     for key in ("FMT_CHECK_CMD", "LINT_CMD", "TEST_CMD", "BUILD_CMD"):
+        if key not in cfg:
+            say("%-14s project.py=（未定义该变量） §2=%s" % (key, table.get(key, "（§2 缺该行）")))
+            mismatch.append(key)
+            continue
         expected = normalize_value(cfg.get(key))
         actual = normalize_value(table.get(key, "（§2 缺该行）"))
         say("%-14s project.py=%-40s §2=%s" % (key, expected, actual))
