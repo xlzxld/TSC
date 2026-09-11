@@ -213,6 +213,21 @@ class LegacyMigrationTests(unittest.TestCase):
         self.assertFalse((self.tmp / "test").exists())
         self.assertFalse((self.tmp / "enforcement").exists())
 
+    def test_dry_run_reports_will_move_not_moved(self):
+        # 回归（v3.1.2 A-05/A-06）：dry-run 不得说"已迁移"，全新安装也不得冒出"版本相同"
+        (self.tmp / "AGENTS.md").write_text(AGENTS_SAMPLE, encoding="utf-8")
+        (self.tmp / "test").mkdir()
+        (self.tmp / "test" / "EVAL-SET.md").write_text("x\n", encoding="utf-8")
+        code, out = run_script(
+            "install", "--from", str(REPO), "--project", str(self.tmp), "--dry-run"
+        )
+        self.assertEqual(code, 0, out)
+        self.assertIn("将迁移到", out)
+        self.assertNotIn("已迁移", out)
+        self.assertNotIn("版本相同", out)
+        self.assertIn("未写入任何文件", out)
+        self.assertTrue((self.tmp / "test" / "EVAL-SET.md").is_file())
+
 
 class SourceRecordTests(unittest.TestCase):
     """回归（v3.1.2 A-02/A-04）：.source 必须始终记录本次实际使用的上游。"""

@@ -543,7 +543,7 @@ def do_apply(proj_root, upstream, dry_run, force):
         if enforce_pending:
             say("版本相同，但执法包有待更新（上游模板演进或待迁移），继续对齐。")
     if legacy_pending:
-        say("版本相同，但检测到旧结构残留，继续执行迁移：%s" % "、".join(legacy_pending))
+        say("检测到旧结构残留，继续执行迁移：%s" % "、".join(legacy_pending))
 
     # 2) 旧结构迁移
     moved, leftover = migrate_legacy(proj_root, dry_run)
@@ -612,7 +612,7 @@ def do_apply(proj_root, upstream, dry_run, force):
         say("无文件需要变动。")
 
     if moved:
-        say("旧结构已迁移到 .agents/：")
+        say("旧结构%s .agents/：" % ("将迁移到" if dry_run else "已迁移到"))
         for src, dst in moved:
             say("  %s → %s" % (src.name, dst.relative_to(proj_root).as_posix()))
     for extra in leftover:
