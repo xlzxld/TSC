@@ -430,8 +430,10 @@ def _enforce_actions(proj_root, upstream, merged_agents_text):
     except OSError:
         pass
     main_branch = section2_value(section2_text(merged_agents_text), "主干分支")
-    if main_branch and PLACEHOLDER in main_branch:
-        main_branch = None  # §2 还是占位符（未适配）→ gate.yml 保持模板默认 [main]
+    if main_branch and (
+        PLACEHOLDER in main_branch or main_branch.strip() in ("无", "—", "")
+    ):
+        main_branch = None  # §2 占位或未填（如非 git 项目）→ gate.yml 保持模板默认 [main]
     deploy, update, skip = [], [], []
 
     def normalize(text):

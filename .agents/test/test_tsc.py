@@ -385,6 +385,15 @@ class InstallSyncE2ETests(unittest.TestCase):
         self.assertIn("| 主干分支 | [自动填充] |", text)
         self.assertNotIn("Markdown 文档 + Python 3", text)
 
+    def test_gate_yml_keeps_default_branch_when_trunk_is_none(self):
+        # 回归（v3.1.3）：§2 主干分支填"无"（如非 git 项目）时，gate.yml 不得写进坏分支名
+        sample = AGENTS_SAMPLE.replace("| 主干分支 | master |", "| 主干分支 | 无 |")
+        tsc.deploy_enforcement(self.tmp, REPO, sample, dry_run=False)
+        gate = tsc.read_text(self.tmp / ".github" / "workflows" / "gate.yml")
+        self.assertIn("branches: [main]", gate)
+        self.assertNotIn("branches: [无", gate)
+        self.assertNotIn("[自动填充]", gate)
+
     def test_fresh_install_gate_yml_keeps_default_branch(self):
         # 占位符不得流进 gate.yml 的 branches:
         code, out = run_script("install", "--from", str(REPO), "--project", str(self.tmp))
