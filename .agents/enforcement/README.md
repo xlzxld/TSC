@@ -12,7 +12,7 @@
 | `.pre-commit-config.yaml` | 项目根（同名） | 本地 git 钩子：密钥扫描 + 提交信息规范 |
 | `commitlint.config.js` | 项目根 | Conventional Commits 规则 |
 
-**门禁本体不在这里**——它就是 `.agents/tsc.py verify`，随 `.agents/` 自动同步。
+**门禁本体不在这里**——由技能目录里的 `.agents/tsc.py verify` 承担（执行逻辑不进项目，由 AI 直接调用）。
 
 ## 归属规则（tsc-managed 标记）
 
@@ -30,7 +30,7 @@
 
 | 层 | 密钥扫描 | 提交信息规范 | 聚合门禁 |
 |---|---|---|---|
-| **本地钩子** | ✅ 本次暂存的内容 | ✅ 本条第信息 | ✅ 全跑 |
+| **本地钩子** | ✅ 本次暂存的内容 | ✅ 本条提交信息 | ✅ 全跑 |
 | **CI (`gate.yml`)** | ✅ **全历史**（gitleaks 官方 action） | ✅ 本次 PR / push 的提交 | ✅ 全跑 |
 
 两点要说清，避免以为"绿了就没事"：
