@@ -487,6 +487,24 @@ class InstallSyncE2ETests(unittest.TestCase):
         self.assertIn("否，仍有 [自动填充] 占位", out)
 
 
+class GateTemplateTests(unittest.TestCase):
+    """执法包模板自身的静态约束。"""
+
+    def test_gate_yml_pins_action_and_dependency_versions(self):
+        # 回归（v3.2.0 P2-02）：action 固定到 commit SHA，npm 依赖钉明确版本，杜绝浮动引用
+        gate = tsc.read_text(REPO / ".agents" / "enforcement" / "gate.yml")
+        uses_lines = [
+            ln.strip() for ln in gate.splitlines()
+            if "uses:" in ln and not ln.strip().startswith("#")
+        ]
+        self.assertTrue(uses_lines)
+        for ln in uses_lines:
+            self.assertNotRegex(ln, r"uses: \S+@v\d+", "浮动 tag：%s" % ln)
+            self.assertRegex(ln, r"[0-9a-f]{40}", "未钉 SHA：%s" % ln)
+        self.assertIn("@commitlint/cli@21.2.2", gate)
+        self.assertIn("@commitlint/config-conventional@21.2.2", gate)
+
+
 class StatusTests(unittest.TestCase):
     """回归（v3.1.2 A-03）：status 对残缺 AGENTS.md 必须如实报告。"""
 

@@ -12,11 +12,11 @@ jobs:
   verify:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0        # 密钥扫描要翻历史，必须取全量
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.12"
 
@@ -28,7 +28,7 @@ jobs:
       # 不用 pre-commit 跑这一步——那里的 gitleaks 只扫暂存内容，
       # 在 CI 上等于只扫本次改动的文件，翻不出仓库里已有的旧密钥。
       - name: 密钥扫描 (gitleaks, 全历史)
-        uses: gitleaks/gitleaks-action@v2
+        uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -37,7 +37,7 @@ jobs:
       - name: 提交信息规范 (commitlint)
         if: ${{ hashFiles('.pre-commit-config.yaml', 'commitlint.config.js') != '' }}
         run: |
-          npm i -D @commitlint/cli @commitlint/config-conventional
+          npm i -D @commitlint/cli@21.2.2 @commitlint/config-conventional@21.2.2
           npx --no -- @commitlint/cli --from "${{ github.event.pull_request.base.sha || github.event.before }}" --to "${{ github.sha }}" --verbose
 
       # 聚合门禁：读 .agents/project.py（唯一命令源），逐条执行。
