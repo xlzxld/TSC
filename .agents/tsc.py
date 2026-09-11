@@ -20,7 +20,7 @@
     0  成功 / 已是最新
     1  需要人工合并（§2 结构有变更）或校验不一致
     2  IO / 编码 / 权限错误
-    3  状态非法（缺 §2、缺 VERSION、找不到上游）
+    3  状态非法（缺 §2、缺 VERSION、找不到上游、门禁全未配置）
 
 设计约束：
     - 零第三方依赖，仅用标准库（Windows 已实测；macOS / Linux 待实测）。
@@ -714,10 +714,10 @@ def cmd_verify(proj_root):
             warn("%s 未通过，停在此处。门禁结论：失败（退出码 %d）" % (label, code))
             return code
     if ran == 0:
-        warn("四条门禁命令均未配置，本次没有真正执行任何检查——这个\"全绿\"是假绿。")
+        warn("四条门禁命令均未配置，本次没有真正执行任何检查——这个\"全绿\"是假绿，未配置不是通过。")
         warn("请编辑 .agents/project.py 填入真实命令（AGENTS.md §2 与之同步）。")
-        say("门禁结论：无可执行项（假绿，退出码 0）")
-        return EXIT_OK
+        warn("门禁结论：未配置（退出码 %d）" % EXIT_STATE)
+        return EXIT_STATE
     say("门禁结论：全绿（退出码 0）")
     return EXIT_OK
 

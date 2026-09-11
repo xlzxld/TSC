@@ -66,6 +66,24 @@ def run_script(*args):
     return proc.returncode, out
 
 
+def gate_inline_source():
+    """从 gate.yml 抽取内联 Python（模拟 YAML run:| 折叠后的效果：去公共缩进）。
+
+    CI 聚合壳与本地 tsc.py 是"同一命令源的两套执行壳"，此抽取器让测试
+    能直接执行 CI 侧真身，防止两套壳判定漂移。
+    """
+    lines = tsc.read_text(REPO / ".agents" / "enforcement" / "gate.yml").split("\n")
+    starts = [i for i, ln in enumerate(lines) if "<<'PYEOF'" in ln]
+    assert len(starts) == 1, "gate.yml 应恰好含一个内联 Python heredoc"
+    body = []
+    for ln in lines[starts[0] + 1:]:
+        if ln.strip() == "PYEOF":
+            break
+        body.append(ln)
+    indent = min(len(ln) - len(ln.lstrip()) for ln in body if ln.strip())
+    return "\n".join(ln[indent:] for ln in body)
+
+
 class Section2Tests(unittest.TestCase):
     def test_span_and_text(self):
         span = tsc.section2_span(AGENTS_SAMPLE)
@@ -474,10 +492,22 @@ class VerifyAndCheckConfigTests(unittest.TestCase):
         code, out = run_script("install", "--from", str(REPO), "--project", str(self.tmp))
         assert code == 0, out
 
-    def test_all_skip_reports_fake_green(self):
+    def test_all_skip_fails_loud(self):
+        # 回归（v3.2.0 P1-01）：全未配置从"假绿警告+rc=0"收紧为"失败 rc=3"，与 CI 同口径
         code, out = run_script("verify", "--project", str(self.tmp))
-        self.assertEqual(code, 0)
+        self.assertEqual(code, 3, out)
         self.assertIn("假绿", out)
+        self.assertNotIn("门禁结论：全绿", out)
+
+    def test_gate_inline_all_skip_exits_3(self):
+        # 回归（v3.2.0 P1-01）：CI 内联壳必须同样把全 skip 判为失败 rc=3
+        proc = subprocess.run(
+            [sys.executable, "-c", gate_inline_source()],
+            cwd=str(self.tmp), capture_output=True,
+        )
+        combined = (proc.stdout + proc.stderr).decode("utf-8", errors="replace")
+        self.assertEqual(proc.returncode, 3, combined)
+        self.assertIn("假绿", combined)
 
     def test_exit_code_passthrough(self):
         # 用辅助脚本规避跨 shell 引号嵌套问题；门禁命令退出码必须原样传递
