@@ -116,14 +116,21 @@ def read_text(path):
 
 
 def write_text_atomic(path, text, dry_run=False):
-    """先写临时文件再替换，避免留下半成品。"""
+    """先写临时文件再替换，避免留下半成品；替换失败时清理临时文件并原样抛错。"""
     if dry_run:
         return
     path = Path(path)
     tmp = path.with_name(path.name + ".tsc-tmp")
-    with open(tmp, "w", encoding="utf-8", newline="\n") as fh:
-        fh.write(text)
-    os.replace(tmp, path)
+    try:
+        with open(tmp, "w", encoding="utf-8", newline="\n") as fh:
+            fh.write(text)
+        os.replace(tmp, path)
+    except OSError:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass  # 清理失败不得掩盖原始错误——原始异常在下方原样抛出
+        raise
 
 
 def write_version(path, version, dry_run=False):
@@ -202,7 +209,7 @@ def normalize_path_arg(value):
     text = str(value)
     if (
         os.name == "nt"
-        and len(text) > 3
+        and len(text) >= 3
         and text[0] == "/"
         and text[1].isalpha()
         and text[2] == "/"
@@ -365,6 +372,7 @@ def section2_to_placeholder(text):
     lines = text.split("\n")
     start, end = span
     out = []
+    header_seen = False
     for i, line in enumerate(lines):
         if start <= i < end:
             stripped = line.strip()
@@ -373,7 +381,11 @@ def section2_to_placeholder(text):
                 if cells and set("".join(cells)) <= set("-: "):
                     out.append(line)  # 表头分隔行
                     continue
-                if len(cells) >= 2 and cells[0] != "项":
+                if not header_seen:
+                    header_seen = True  # 表头行（不假设首列标签字面）
+                    out.append(line)
+                    continue
+                if len(cells) >= 2:
                     cells[1] = PLACEHOLDER
                     out.append("| " + " | ".join(cells) + " |")
                     continue
@@ -836,6 +848,15 @@ def build_parser():
 def main(argv=None):
     _init_stdout()
     args = build_parser().parse_args(argv)
+    try:
+        return _dispatch(args)
+    except OSError as exc:
+        # 顶层兜底：读盘 / 定位上游等未捕获的 IO 异常按契约归一为退出码 2
+        warn("执行失败（IO / 权限 / 文件占用）：%s" % exc)
+        return EXIT_IO
+
+
+def _dispatch(args):
     if args.project:
         proj_root = Path(normalize_path_arg(args.project)).expanduser().resolve()
     else:

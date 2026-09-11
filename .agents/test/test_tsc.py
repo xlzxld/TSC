@@ -419,6 +419,45 @@ class StatusTests(unittest.TestCase):
         self.assertNotIn("是否填好：是", out)
 
 
+class RobustnessTests(unittest.TestCase):
+    """回归（v3.1.2 A-07~A-10）：异常路径与解析健壮性。"""
+
+    def test_normalize_accepts_drive_root(self):
+        # 回归（A-10）：/c/ 恰好三个字符，也要归一成 C:/
+        if os.name != "nt":
+            self.skipTest("MSYS 路径还原仅 Windows 生效")
+        self.assertEqual(tsc.normalize_path_arg("/c/"), "C:/")
+
+    def test_placeholder_skips_header_without_magic_label(self):
+        # 回归（A-09）：表头首列不叫"项"时，表头行的取值列也不得被占位化
+        sample = AGENTS_SAMPLE.replace(
+            "| 项 | 命令 / 取值 | 验证条件 |", "| 名称 | 值 | 说明 |"
+        )
+        out = tsc.section2_to_placeholder(sample)
+        self.assertIn("| 名称 | 值 | 说明 |", out)
+        self.assertIn("| 测试 (Test) | [自动填充] |", out)
+
+    def test_atomic_write_cleans_tmp_on_failure(self):
+        # 回归（A-08）：os.replace 失败时不得残留 .tsc-tmp，且原异常必须抛出
+        from unittest import mock
+
+        target_dir = Path(tempfile.mkdtemp(prefix="tsc-tmp-"))
+        self.addCleanup(shutil.rmtree, target_dir, True)
+        target = target_dir / "f.txt"
+        with mock.patch("os.replace", side_effect=OSError("disk full")):
+            with self.assertRaises(OSError):
+                tsc.write_text_atomic(target, "x")
+        self.assertEqual(list(target_dir.glob("*.tsc-tmp")), [])
+
+    def test_main_maps_oserror_to_exit_2(self):
+        # 回归（A-07）：底层 IO 异常不得裸 traceback，须归一为退出码 2
+        from unittest import mock
+
+        with mock.patch.object(tsc, "find_upstream", side_effect=OSError("boom")):
+            code = tsc.main(["status"])
+        self.assertEqual(code, 2)
+
+
 class VerifyAndCheckConfigTests(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp(prefix="tsc-verify-"))
