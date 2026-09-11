@@ -212,6 +212,27 @@ class InstallSyncE2ETests(unittest.TestCase):
             self.assertIn(rel, out, "dry-run 漏报 %s" % rel)
         self.assertEqual(list(self.tmp.rglob("*")), [])  # dry-run 零写盘
 
+    def test_dead_source_falls_back_and_gets_repaired(self):
+        # 回归（P2-1）：技能目录搬家（.source 死路径）不得让存量项目 sync/status 直接 rc=3
+        code, _ = run_script("install", "--from", str(REPO), "--project", str(self.tmp))
+        self.assertEqual(code, 0)
+        dead = self.tmp / "vanish"  # 从未存在的路径，模拟技能目录被搬走
+        (self.tmp / ".agents" / ".source").write_text(str(dead) + "\n", encoding="utf-8")
+        code, out = run_script("status", "--project", str(self.tmp))  # 只读命令：回退但不改记录
+        self.assertEqual(code, 0, out)
+        self.assertIn("已失效", out)
+        self.assertIn(str(REPO), out)  # 回退到脚本所在仓库（当前即本仓库）
+        self.assertEqual(tsc.read_text(self.tmp / ".agents" / ".source").strip(), str(dead))
+        code, out = run_script("sync", "--project", str(self.tmp), "--dry-run")
+        self.assertEqual(code, 0, out)
+        self.assertIn(".agents/.source", out)
+        self.assertIn("未写入任何文件", out)
+        code, out = run_script("sync", "--project", str(self.tmp))  # 写入命令：顺手修正死记录
+        self.assertEqual(code, 0, out)
+        self.assertEqual(
+            tsc.read_text(self.tmp / ".agents" / ".source").strip(), str(REPO)
+        )
+
     def test_sync_same_version_is_noop(self):
         code, _ = run_script("install", "--from", str(REPO), "--project", str(self.tmp))
         self.assertEqual(code, 0)

@@ -212,15 +212,36 @@ def normalize_path_arg(value):
 
 
 def find_upstream(explicit, proj_root):
-    """按 显式 --from > 项目 .agents/.source > 脚本自身所在仓库 的顺序定位上游。"""
+    """按 显式 --from > 项目 .agents/.source > 脚本自身所在仓库 的顺序定位上游。
+
+    .source 记录的路径失效（技能目录搬家）时回退到脚本所在仓库并提示，
+    存量项目仍可继续 sync/status；install/sync 成功后会顺手修正记录（见 do_apply）。
+    """
     if explicit:
         return Path(normalize_path_arg(explicit)).expanduser().resolve()
     source_file = Path(proj_root) / AGENTS_DIR / SOURCE_FILE
     if source_file.is_file():
         recorded = read_text(source_file).strip()
         if recorded:
-            return Path(recorded).expanduser().resolve()
+            candidate = Path(recorded).expanduser().resolve()
+            if validate_upstream(candidate):
+                # 校验有缺失项 → 记录已失效，回退到脚本所在仓库
+                warn("记录的上游已失效（技能目录可能搬过家）：%s" % candidate)
+                warn("本次回退到脚本所在仓库继续；install/sync 会顺手把 .source 修正为实际使用的上游。")
+                return script_dir().parent
+            return candidate
     return script_dir().parent  # 技能/母版自举：脚本上一级即上游根
+
+
+def source_record_dead(proj_root):
+    """项目 .agents/.source 记录的路径是否已失效（存在且非空且校验不过）。"""
+    source_file = Path(proj_root) / AGENTS_DIR / SOURCE_FILE
+    if not source_file.is_file():
+        return False
+    recorded = read_text(source_file).strip()
+    if not recorded:
+        return False
+    return bool(validate_upstream(Path(recorded).expanduser().resolve()))
 
 
 def validate_upstream(root):
@@ -483,14 +504,18 @@ def do_apply(proj_root, upstream, dry_run, force):
     local_ver = local_version(proj_root)
     up_ver = upstream_version(upstream)
 
-    # 版本相同 + 没有旧结构残留 + 执法包也不待更新，才是真正的"无事可做"。
+    # 版本相同 + 没有旧结构残留 + 执法包不待更新 + .source 记录未失效，才是"无事可做"。
     legacy_pending = detect_legacy(proj_root)
     enforce_pending = False
     if not force and local_ver and local_ver == up_ver:
         # 版本没变不等于无事可做：上游模板可能演进了（托管落盘件自动更新）、
-        # 或旧版部署的落盘件还在等一次性迁移。
+        # 或旧版部署的落盘件还在等一次性迁移、或 .source 死记录待修正。
         enforce_pending = enforcement_pending(proj_root, upstream, merged)
-        if not enforce_pending and not legacy_pending:
+        if (
+            not enforce_pending
+            and not legacy_pending
+            and not source_record_dead(proj_root)
+        ):
             say("已是最新：本项目已是 v%s，无需变动。" % local_ver)
             return EXIT_OK
         if enforce_pending:
@@ -523,7 +548,8 @@ def do_apply(proj_root, upstream, dry_run, force):
         project_py = agents_dir / PROJECT_FILE
         source_file = agents_dir / SOURCE_FILE
         need_project_py = example.is_file() and not project_py.is_file()
-        need_source = not source_file.is_file()
+        # .source 缺失或记录已失效（技能目录搬家）都以本次实际使用的上游为准写入/修正
+        need_source = not source_file.is_file() or source_record_dead(proj_root)
         # dry-run 也要计入预览（旧版漏报这两个文件，且汇报路径缺 .agents/ 前缀）
         if need_project_py:
             changed.append((Path(AGENTS_DIR) / PROJECT_FILE).as_posix())
