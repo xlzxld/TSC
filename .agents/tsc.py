@@ -306,6 +306,38 @@ def collect_payload(upstream):
     return items
 
 
+PLACEHOLDER = "[自动填充]"
+
+
+def section2_to_placeholder(text):
+    """把 §2 表格的「命令 / 取值」列整体替换为占位符（结构与验证条件列保持原样）。
+
+    用于全新 install：目标项目还没探测过环境，绝不能继承母版仓库自己的取值。
+    母版 §2 既是本仓库的真实配置、又是分发模板，本函数在分发时把取值抹成占位，
+    保持"契约只有一个真身"，不引入第二份 §2 模板。
+    """
+    span = section2_span(text)
+    if span is None:
+        return text
+    lines = text.split("\n")
+    start, end = span
+    out = []
+    for i, line in enumerate(lines):
+        if start <= i < end:
+            stripped = line.strip()
+            if stripped.startswith("|"):
+                cells = [c.strip() for c in stripped.strip("|").split("|")]
+                if cells and set("".join(cells)) <= set("-: "):
+                    out.append(line)  # 表头分隔行
+                    continue
+                if len(cells) >= 2 and cells[0] != "项":
+                    cells[1] = PLACEHOLDER
+                    out.append("| " + " | ".join(cells) + " |")
+                    continue
+        out.append(line)
+    return "\n".join(out)
+
+
 def section2_value(block, row_prefix):
     """从 §2 表格取某一行「命令 / 取值」列（第 2 列）的值。找不到返回 None。"""
     if not block:
@@ -336,6 +368,8 @@ def _enforce_actions(proj_root, upstream, merged_agents_text):
     proj_root = Path(proj_root)
     src_root = Path(upstream) / AGENTS_DIR
     main_branch = section2_value(section2_text(merged_agents_text), "主干分支")
+    if main_branch and PLACEHOLDER in main_branch:
+        main_branch = None  # §2 还是占位符（未适配）→ gate.yml 保持模板默认 [main]
     deploy, update, skip = [], [], []
 
     def normalize(text):
@@ -436,7 +470,8 @@ def do_apply(proj_root, upstream, dry_run, force):
             return EXIT_MERGE
         merged = compose_agents_md(up_text, proj_text)
     else:
-        merged = up_text
+        # 全新接入：§2 取值抹成占位符，禁止继承母版仓库自己的项目配置
+        merged = section2_to_placeholder(up_text)
 
     local_ver = local_version(proj_root)
     up_ver = upstream_version(upstream)

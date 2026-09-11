@@ -103,7 +103,7 @@ python3 "<SKILL_DIR>/.agents/tsc.py" check-config --project "<目标项目根>"
 
 ## 五、首次接入后要提醒用户的一件事
 
-`.agents/project.py` 生成时四条命令都是 `None`。要提醒用户填成本项目真实的命令，否则门禁会全程 skip 而给出"全绿"的假结论。填完由你代跑一次 `check-config` 确认 `AGENTS.md` §2 与 `project.py` 一致——同样不要让用户自己去敲。
+新装项目的 `AGENTS.md` §2 取值列全是 `[自动填充]` 占位（不会继承母版仓库自己的取值），`.agents/project.py` 四条命令也都是 `None`——**两处都要填成本项目真实取值**，否则门禁会全程 skip 而给出"全绿"的假结论、`check-config` 也会报不一致。填完由你代跑一次 `check-config` 确认同源——同样不要让用户自己去敲。
 
 ## 六、执法包是默认安装项
 

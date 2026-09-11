@@ -94,7 +94,7 @@ python3 "$SK/.agents/tsc.py" check-config --project <项目根>   # 校验 §2 �
 
 ### 接入后必做一次的一件事
 
-`.agents/project.py` 生成时四条命令都是 `None`。填成本项目真实的命令，否则门禁全程 skip，会给出"全绿"的假结论：
+新装项目的 §2 取值列全是 `[自动填充]` 占位，`.agents/project.py` 四条命令都是 `None`。**两处都要填成本项目真实取值**，否则门禁全程 skip 会给出"全绿"的假结论：
 
 ```python
 import sys

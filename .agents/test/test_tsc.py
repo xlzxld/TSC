@@ -216,16 +216,41 @@ class InstallSyncE2ETests(unittest.TestCase):
     def test_install_rejects_section2_structure_drift(self):
         code, _ = run_script("install", "--from", str(REPO), "--project", str(self.tmp))
         self.assertEqual(code, 0)
+        import re
         agents_md = self.tmp / "AGENTS.md"
         agents_md.write_text(
-            agents_md.read_text(encoding="utf-8").replace(
-                "| 格式化 (Format) | 无 | — |\n", ""
-            ),
+            re.sub(r"\| 格式化 \(Format\) \|[^\n]*\|\n", "",
+                   agents_md.read_text(encoding="utf-8")),
             encoding="utf-8",
         )
         code, out = run_script("install", "--from", str(REPO), "--project", str(self.tmp))
         self.assertEqual(code, 1, out)
         self.assertIn("缺少字段", out)
+
+    def test_fresh_install_section2_is_placeholder(self):
+        # 修复回归：新装项目不得继承母版仓库自己的 §2 取值（如"Markdown 文档 + Python 3"）
+        code, out = run_script("install", "--from", str(REPO), "--project", str(self.tmp))
+        self.assertEqual(code, 0, out)
+        text = (self.tmp / "AGENTS.md").read_text(encoding="utf-8")
+        self.assertIn("| 测试 (Test) | [自动填充] |", text)
+        self.assertIn("| 主干分支 | [自动填充] |", text)
+        self.assertNotIn("Markdown 文档 + Python 3", text)
+
+    def test_fresh_install_gate_yml_keeps_default_branch(self):
+        # 占位符不得流进 gate.yml 的 branches:
+        code, out = run_script("install", "--from", str(REPO), "--project", str(self.tmp))
+        self.assertEqual(code, 0, out)
+        gate = (self.tmp / ".github" / "workflows" / "gate.yml").read_text(encoding="utf-8")
+        self.assertIn("branches: [main]", gate)
+        self.assertNotIn("[自动填充]", gate)
+
+    def test_status_flags_unfilled_section2(self):
+        # 修复回归：§2 全占位时 status 必须报"未填好"，不得误报"是"
+        code, _ = run_script("install", "--from", str(REPO), "--project", str(self.tmp))
+        self.assertEqual(code, 0)
+        code, out = run_script("status", "--from", str(REPO), "--project", str(self.tmp))
+        self.assertEqual(code, 0, out)
+        self.assertIn("否，仍有 [自动填充] 占位", out)
 
 
 class VerifyAndCheckConfigTests(unittest.TestCase):
