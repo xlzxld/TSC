@@ -1,5 +1,28 @@
 # 变更记录 (CHANGELOG)
 
+## v3.0.0（2026-09-11）
+
+**依据**：用户需求——把契约封装成可一键调用的技能 `tsc`，并解决"3 个文档 + 1 个目录散落项目根目录"的接入混乱；同时本机实测 **Windows 无 `make`**（`command -v make` 退出码 1），聚合门禁必须脱离 make。
+
+| # | 变更 | 文件 | 依据发现 |
+|---|---|---|---|
+| 1 | 目录收敛：部署单元从"3 个文档 + 1 个目录"改为"根目录 `AGENTS.md` + `.agents/` 整目录"；`AUDIT-SPEC.md` / `BOOTSTRAP.md` / `enforcement/` / `test/` 全部移入 `.agents/` | 全仓 | 用户需求（2026-09-11） |
+| 2 | 新增技能包：仓库根加 `SKILL.md`（`name: tsc`），仓库即技能，三平台安装方式写入 `README.md` | `SKILL.md`、`README.md` | 同上 |
+| 3 | 新增 `.agents/tsc.py` 作为唯一核心：`install` / `sync` / `verify` / `status` / `check-config`，零第三方依赖，Windows 与 macOS 通用 | `.agents/tsc.py` | 同上 |
+| 4 | 删除 `enforcement/Makefile`，聚合门禁改由 `python3 .agents/tsc.py verify` 承担；`gate.yml` 内嵌命令同步替换 | `.agents/enforcement/` | Windows 无 make；上一轮体检 P1 A-01（`BUILD_CMD` 空值静默放行）随删除消解 |
+| 5 | 新增"门禁命令单源"机制：`.agents/project.py` 为机器可读源、`AGENTS.md` §2 为人读源，`check-config` 校验两者一致 | `.agents/project.py`、`AGENTS.md` | 上一轮体检 P1 A-02（门禁命令双真身、无交叉校验） |
+| 6 | `sync` 保护 §2：只替换 §2 以外的内容；§2 结构变更时报错并**不写任何文件**（退出码 1），防静默缺字段 | `.agents/tsc.py` | 设计评审发现（防静默覆盖项目定制） |
+| 7 | 旧结构自动迁移：根目录散着的 `AUDIT-SPEC.md` / `BOOTSTRAP.md` / `enforcement/` / `test/` 由 `sync` 移入 `.agents/`，**不自动删除任何文件** | `.agents/tsc.py` | 用户需求（7 个存量项目待迁移） |
+| 8 | 文档版本滞后修正：`使用手册.md` 与 `enforcement/README.md` 的版本声明、`AGENTS.md` 行数表述 | 多处 | 上一轮体检 P2 A-04 |
+| 9 | `EVAL-SET.md` 回放记录表补 v3.0.0 行并标"待回放" | `.agents/test/EVAL-SET.md` | 上一轮体检 P2 A-05（合入门禁无记录） |
+| 10 | 可选执法层降级为"默认不启用"：`gate.yml` 的密钥扫描改为"有 `.pre-commit-config.yaml` 才跑"，避免未启用时 CI 直接红 | `.agents/enforcement/gate.yml` | 用户要求"约束不要过多" |
+
+**版本**：v2.1.2 → v3.0.0（**破坏性结构变更**：文件位置与门禁命令均改变，依赖项目需跑一次 `tsc.py sync` 迁移）。
+**预算**：`AGENTS.md` 77 行（< 80 行门禁，`wc -l` LF 计，余量 3 行）；规则数 21 条不变。
+**未采纳**：上一轮体检 P2 A-06（`TEST-MANUAL.md` 降级模式的 PASS 仍可判"可合入"）——本轮为结构改造，不扩范围；登记备查，下轮处理。
+**历史条目不改**：v2.1.2 及更早的修订记录按原样保留，其内部的旧路径与 `make verify` 属历史事实。
+**合入后待办验证**：① v3.0.0 对抗回放（`.agents/test/EVAL-SET.md` 回放表待填）；② macOS 侧实跑一次 `install` 与 `verify`，确认与 Windows 结论等价；③ 7 个存量项目的结构迁移（本机：JSF / 量化 / HYT-CAD / HYT-NX / G1 / HYT-MLFXBG / `Documents\提示词`）。
+
 ## v2.1.2（2026-09-08）
 
 **依据**：用户直接提出的新增需求——AI 对用户的交流须用简洁明了的大白话。

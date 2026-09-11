@@ -1,0 +1,29 @@
+name: gate
+on:
+  pull_request:
+    # 改成你的主干分支名（对应 AGENTS.md §2「主干分支」那一行的取值）
+    branches: [main]
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      # 按项目技术栈补充运行时安装，例如：
+      #   - uses: actions/setup-node@v4
+      #     with: { node-version: 20 }
+      - name: Secrets scan (gitleaks) — 仅在启用本地钩子层时执行
+        run: |
+          if [ -f .pre-commit-config.yaml ]; then
+            pip install pre-commit
+            pre-commit run --all-files
+          else
+            echo "未启用 .pre-commit-config.yaml，跳过密钥扫描（可选层）"
+          fi
+      - name: Verify (fmt-check / lint / test / build)
+        run: python3 .agents/tsc.py verify
