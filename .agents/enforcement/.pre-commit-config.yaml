@@ -1,0 +1,31 @@
+# tsc-managed —— 本文件由 tsc 技能托管：上游模板更新时会被自动覆盖；项目自己的修改会被冲掉。若要接管，请删除本标记行并自行维护。
+# 契约执法层 —— 本地 git 钩子
+# 落盘位置：项目根 .pre-commit-config.yaml（由 `tsc.py install` 自动部署）
+# 激活：pre-commit install && pre-commit install --hook-type commit-msg
+#
+# 注意：本文件里的两个钩子**不是可选项**。一旦装了本地钩子，它们就会真实拦截提交；
+# 没装依赖包时不是"跳过"而是"报错拦住"。启用前请按下面各钩子的说明装好依赖。
+
+repos:
+  # 1) 密钥扫描
+  #    官方入口默认是 `gitleaks git --pre-commit --staged`，即**只扫本次暂存的内容**。
+  #    这对"防止新密钥进来"是够的；但它不翻历史，仓库里已有的旧密钥不会被它发现。
+  #    想连历史一起清，另跑一次：gitleaks git --redact --log-opts="--all"
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.30.1
+    hooks:
+      - id: gitleaks
+        name: 密钥扫描 (gitleaks)
+
+  # 2) 提交信息规范（Conventional Commits）
+  #    依赖：npm i -D @commitlint/cli @commitlint/config-conventional
+  #    说明：entry 必须写 `@commitlint/cli`（包名），不能写 `commitlint`——
+  #    后者不是 npm 包名，npx 会去下载一个不存在的包并直接失败，把提交堵死。
+  #    `--no` 表示只用本地已装依赖、不联网下载；没装就是明确报错，不会静默放行。
+  - repo: local
+    hooks:
+      - id: commitlint
+        name: 提交信息规范 (commitlint)
+        language: system
+        entry: npx --no -- @commitlint/cli --edit
+        stages: [commit-msg]

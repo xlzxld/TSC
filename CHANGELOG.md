@@ -1,5 +1,81 @@
 # 变更记录 (CHANGELOG)
 
+## v3.1.0（2026-09-11）
+
+**依据**：用户需求——评估 v2.1.2 与当前版本优劣后全方位优化，最少 6 轮迭代、每轮自评。评估结论：v3.0.0 在部署体积（10KB vs 97KB）、平台兼容（脱离 make）、命令单源（§2 ↔ project.py 交叉校验）、技能化分发四个维度全面优于 v2.1.2，本轮在其上做缺陷修复与加固，无破坏性变更。
+
+| # | 变更 | 文件 | 依据发现 |
+|---|---|---|---|
+| 1 | 修正使用手册"执法包默认就是不装"的过期表述（与 v3.0.0 变更 15"默认安装"直接矛盾） | `使用手册.md` | 全文 grep 定位；CHANGELOG 历史条目按"历史不改"原则保留 |
+| 2 | `verify` 四条命令全 skip 时输出"假绿"显式警告；`check-config` 对 project.py 未定义变量显式报不一致（旧版静默当"无"通过）；POSIX 信号致死退出码归一为 2；删除 `do_apply` 中 VERSION 重复写入与死代码 `continue`；修正 `section2_value` 文档字符串列号 | `.agents/tsc.py` | 沙箱回归实测：缺 `TEST_CMD` 旧版 rc=0（缺陷）、新版 rc=1；全 skip 旧版无提示、新版输出假绿警告 |
+| 3 | 新增 stdlib 回归测试套件（`test_tsc.py`，零依赖）并接入门禁：§2 切分/合并保真/结构签名、MSYS 路径归一、执法包归属三态、install 端到端、分支名跟随、幂等早退、结构漂移拒写、退出码原样传递等；§2 测试行与 `project.py` 同步登记 | `.agents/test/test_tsc.py`、`AGENTS.md` §2、`.agents/project.py` | R-1.3 修复前置要求常驻回归；本仓库门禁从"全 skip 假绿"变为真实执行 |
+| 4 | 测试手册与验收清单对齐瘦身后结构（命令从技能目录以 `--project` 执行、落地单元三段式、执法包"默认装"表述）；平台声明改为如实标注"Windows 已实测；macOS/Linux 待实测"；README 修正"`.pre-commit-config.yaml` 里的 gate.yml"指代错乱；SKILL.md 上游文件清单补全 | `TEST-MANUAL.md`、`ACCEPTANCE.md`、`SKILL.md`、`README.md`、`.agents/tsc.py` | 通读比对发现；原文"Windows 与 macOS 通用"属无实测来源取值（违反 R-0.2） |
+| 5 | **新装项目 §2 占位化**：fresh install 把 §2 取值列替换为 `[自动填充]`（结构与验证条件列不动，单源仍是母版 §2），修复新装项目继承母版仓库自己取值的缺陷；`status` 对占位 §2 如实报"未填好"；`_enforce_actions` 对占位主干分支防御（gate.yml 保持默认 `[main]`，杜绝 `branches: [[自动填充]]`） | `.agents/tsc.py`、`SKILL.md`、`README.md`、`使用手册.md` | 第 2 轮沙箱冒烟实测复现：新装项目出现"Markdown 文档 + Python 3"且 status 误报"已填好" |
+| 6 | **母版自举不再铺执法包**：`_enforce_actions` 检测目标即上游自身时跳过落盘，修复 `sync --from .` 会把三份执法包铺进母版仓库（与文档"母版纯净"不变量矛盾） | `.agents/tsc.py` | dry-run 实测复现：自举列出 3 项执法包"将写入"；修复后 sync 自举仅更新 `.agents/VERSION` |
+
+**版本**：v3.0.0 → v3.1.0（缺陷修复 + 回归套件，无破坏性变更；行为变化两处——新装 §2 占位化、全 skip 假绿警告——均为缺陷纠正方向）。
+**预算**：AGENTS.md 77 行（< 80 行门禁，`wc -l` LF 计）；规则数 21 条不变。
+**本轮实测**：23 个单测全绿（`python -m unittest discover -s .agents/test -p "test_*.py"` rc=0）｜`verify` rc=0（真实执行测试）｜`check-config` rc=0｜`sync --from .` 自举 rc=0 且仅更新 `.agents/VERSION`、`.github/` 未生成｜关键修复均有"修复前失败 / 修复后通过"对照（见变更 2、5、6 各自实测行）。
+**六轮自评摘要**：①文档矛盾已清（grep 零残留）；②行为级缺陷全部带对照取证，但回归当时只是一次性沙箱——由 ③常驻套件锁死；④跨文档口径统一，平台声明回归诚实；⑤最重要的一处设计缺陷修复（单源分发与项目定制的边界）；⑥自举污染修复后发版流程与文档不变量终于一致。遗留：macOS/Linux 实测、7 个存量项目迁移、EVAL-SET 人类施压回放（沿用 v3.0.0 待办，另见下行）。
+**合入后待办验证**：① EVAL-SET 7 条对抗回放（针对 v3.1.0，回放表已补行）；② macOS / Linux 侧实跑一次 `install` 与 `verify`；③ 7 个存量项目的结构迁移与 §2 重填（新装占位化后存量项目跑 `sync` 不受影响——§2 已有真实取值，走保留路径）。
+
+## v3.0.0（2026-09-11）
+
+**依据**：用户需求——把契约封装成可一键调用的技能 `tsc`，并解决"3 个文档 + 1 个目录散落项目根目录"的接入混乱；同时本机实测 **Windows 无 `make`**（`command -v make` 退出码 1），聚合门禁必须脱离 make。
+
+| # | 变更 | 文件 | 依据发现 |
+|---|---|---|---|
+| 1 | 目录收敛：部署单元从"3 个文档 + 1 个目录"改为"根目录 `AGENTS.md` + `.agents/` 整目录"；`AUDIT-SPEC.md` / `BOOTSTRAP.md` / `enforcement/` / `test/` 全部移入 `.agents/` | 全仓 | 用户需求（2026-09-11） |
+| 2 | 新增技能包：仓库根加 `SKILL.md`（`name: tsc`），仓库即技能，三平台安装方式写入 `README.md` | `SKILL.md`、`README.md` | 同上 |
+| 3 | 新增 `.agents/tsc.py` 作为唯一核心：`install` / `sync` / `verify` / `status` / `check-config`，零第三方依赖，Windows 与 macOS 通用 | `.agents/tsc.py` | 同上 |
+| 4 | 删除 `enforcement/Makefile`，聚合门禁改由 `python3 .agents/tsc.py verify` 承担；`gate.yml` 内嵌命令同步替换 | `.agents/enforcement/` | Windows 无 make；上一轮体检 P1 A-01（`BUILD_CMD` 空值静默放行）随删除消解 |
+| 5 | 新增"门禁命令单源"机制：`.agents/project.py` 为机器可读源、`AGENTS.md` §2 为人读源，`check-config` 校验两者一致 | `.agents/project.py`、`AGENTS.md` | 上一轮体检 P1 A-02（门禁命令双真身、无交叉校验） |
+| 6 | `sync` 保护 §2：只替换 §2 以外的内容；§2 结构变更时报错并**不写任何文件**（退出码 1），防静默缺字段 | `.agents/tsc.py` | 设计评审发现（防静默覆盖项目定制） |
+| 7 | 旧结构自动迁移：根目录散着的 `AUDIT-SPEC.md` / `BOOTSTRAP.md` / `enforcement/` / `test/` 由 `sync` 移入 `.agents/`，**不自动删除任何文件** | `.agents/tsc.py` | 用户需求（7 个存量项目待迁移） |
+| 8 | 文档版本滞后修正：`使用手册.md` 与 `enforcement/README.md` 的版本声明、`AGENTS.md` 行数表述 | 多处 | 上一轮体检 P2 A-04 |
+| 9 | `EVAL-SET.md` 回放记录表补 v3.0.0 行并标"待回放" | `.agents/test/EVAL-SET.md` | 上一轮体检 P2 A-05（合入门禁无记录） |
+| 10 | 可选执法层降级为"默认不启用"：`gate.yml` 的密钥扫描改为"有 `.pre-commit-config.yaml` 才跑"，避免未启用时 CI 直接红 | `.agents/enforcement/gate.yml` | 用户要求"约束不要过多" |
+| 11 | 调用方式修正为"一句话调用"：`SKILL.md` 命令路由改为以自然语言触发词为入口并明确"底层命令由 agent 代跑、用户不敲命令"，`README.md` 第二节与 `使用手册.md` 第四/五节同步改写，命令行降级为 CI/兜底用途 | `SKILL.md`、`README.md`、`使用手册.md` | 用户反馈（2026-09-11）："让我自己敲命令就失去了它作为技能的目的，封装为技能就是为了能够方便调用，一句话的事" |
+| 12 | 触发词收短：接入入口由"给这个项目接入契约"改为**"接入契约"**（4 字），去掉冗余前缀 | `SKILL.md`、`README.md`、`使用手册.md` | 用户反馈："'给这个项目接入契约'太长了，改为'接入契约'" |
+| 13 | **门禁改为 AI 自动执行**：`SKILL.md` 新增 §二「自动执行：这些动作不需要用户开口」——改完文件、提交前、修完每个问题后一律自动跑 `verify`，跑完补 `check-config`；用户不再需要说"跑门禁"，该触发词从路由表移除 | `SKILL.md`、`README.md`、`使用手册.md` | 用户反馈："跑门禁什么的应该由 AI 自动判断自动执行，不必用户说" |
+| 14 | `AGENTS.md` §4「修复 [ID]」行去掉内联命令，改为语义描述"门禁全绿"——契约内不写具体命令，命令单源归 `project.py` / `tsc.py` | `AGENTS.md` | 同上（避免契约正文与命令实现耦合） |
+| 15 | **执法包改为默认安装**：`tsc.py install` 自动把 `enforcement/` 三份模板落到生效位置（`gate.yml` → `.github/workflows/`，另两份 → 项目根），`gate.yml` 的 `branches:` 按 §2「主干分支」自动填；已存在且被项目改过的文件只提示不改写 | `.agents/tsc.py`、`.agents/enforcement/README.md`、`SKILL.md`、`README.md`、`使用手册.md`、`AGENTS.md` §5 | 用户反馈："执法包为什么现在默认不安装，我觉得得安装" |
+| 16 | **修 commitlint 钩子写错包名**：`entry` 由 `npx --no -- commitlint --edit` 改为 `npx --no -- @commitlint/cli --edit`。实测旧写法会去下载不存在的 `commitlint@21.2.2` 包并 `exit 1`，**把提交堵死**；新写法包名正确（`@commitlint/cli@21.2.2`），装了依赖即正常拦/放 | `.agents/enforcement/.pre-commit-config.yaml` | 本轮执法包评估实测发现 |
+| 17 | **修"跳过后靠 CI"的错误说明**：原文写"不想装就跳过、靠 CI 兜底"，实测本地钩子一旦激活，依赖缺失是**报错拦住提交**而非自动跳过。三处文档改为准确描述，并明确"不想被拦就别执行 `pre-commit install`" | `.agents/enforcement/README.md`、`SKILL.md`、`README.md`、`.agents/tsc.py` 提示语 | 同上 |
+| 18 | **CI 密钥扫描改为真正覆盖全历史**：`gate.yml` 去掉"用 pre-commit 跑 gitleaks"（该入口只扫暂存内容，在 CI 上等于只扫本次改动），改用官方 `gitleaks/gitleaks-action@v2` + `fetch-depth: 0`；同时补 `push: main` 触发与 `--from/--to` 范围的 commitlint 校验 | `.agents/enforcement/gate.yml` | 同上 |
+| 19 | 执法包文档补"三层各拦什么"对照表与**已知限制**（密钥扫描是模式匹配、默认规则覆盖不到自定义内网域名/连接串；fork PR 的 base sha 可能取不到） | `.agents/enforcement/README.md` | 同上 |
+| 20 | **执行逻辑不再复制进项目（瘦身）**：`collect_payload` 只分发 `VERSION`，项目内 `.agents/` 仅剩 `project.py` / `VERSION` / `.source`（约 10KB，原 97KB）；`tsc.py` / `AUDIT-SPEC.md` / `BOOTSTRAP.md` / `verify.*` / `test/` / `enforcement/` 模板原件常驻技能目录，调用一律 `tsc.py <子命令> --project <项目根>`；`status` 对旧项目残留的执行逻辑只提示不删（R-3.4），扫描目标为上游/技能目录自身时不误报 | `.agents/tsc.py`、`SKILL.md`、`README.md`、`使用手册.md`、`AGENTS.md` §2 尾注与 §5、`.agents/BOOTSTRAP.md`、`.agents/verify.ps1`、`.agents/verify.sh` | 用户观点："技能已装在平台上，没必要再复制到其他项目中"——判断成立（执行逻辑部分），但 `AGENTS.md` / `project.py` / 钩子与 CI 落盘件必须留在项目：平台只自动读项目根 `AGENTS.md`；门禁命令跨项目不通用；git 钩子与 CI 只认项目自己的文件 |
+| 21 | **CI 聚合门禁改为内联实现**：`gate.yml` 的 verify 步骤不再调 `.agents/tsc.py`（瘦身项目里已无此文件，且 CI runner 无技能目录、不应引入对私有技能仓库的 token 依赖），改为内联 Python 直接读 `.agents/project.py`（唯一命令源）逐条执行 | `.agents/enforcement/gate.yml` | 变更 20 的必然后果；命令单源仍是 `project.py`，聚合壳本地/CI 各一套但读同一源 |
+| 22 | **执法包归属标记（tsc-managed）**：三份模板各加一行 `# tsc-managed`（`commitlint.config.js` 用 `//`）标记；`deploy_enforcement` 改按标记判归属并返回 `(新部署, 已更新, 跳过)` 三元组——带标记 = 技能托管随上游自动覆盖；不带标记但正文一致（忽略标记行与 gate.yml 分支名，归一化比较）= 旧版部署一次性升级为托管版；不带标记且正文不同 = 项目接管永不覆盖只提示。**修复缺口：上游模板演进后，旧版部署的落盘件被误判"内容已被项目改过"而永远跳过**（沙箱实测复现：临时上游改 `commitlint.config.js` 后重跑 `install`，项目文件未更新且报跳过）；汇报区分"新部署 / 已更新 / 跳过"三类 | `.agents/tsc.py`、`.agents/enforcement/{gate.yml,.pre-commit-config.yaml,commitlint.config.js,README.md}`、`SKILL.md`、`README.md` | 用户质疑："同步契约这个命令是完整的更新吗？比如执法包或者什么其他的脚本我认为也应该一起更新" |
+
+**版本**：v2.1.2 → v3.0.0（**破坏性结构变更**：文件位置与门禁命令均改变，依赖项目需跑一次 `tsc.py sync` 迁移）。
+**预算**：`AGENTS.md` 77 行（< 80 行门禁，`wc -l` LF 计，余量 3 行）；规则数 21 条不变。
+**未采纳**：上一轮体检 P2 A-06（`TEST-MANUAL.md` 降级模式的 PASS 仍可判"可合入"）——本轮为结构改造，不扩范围；登记备查，下轮处理。
+**本轮新增实测（变更 15）**：`install --dry-run` 不写盘且列出 3 项执法包 ↔ 真跑落盘 3 项（`rc=0`）｜`§2` 主干分支改 `master` 后 `gate.yml` 的 `branches:` 跟随变 `master`｜项目自改的 `commitlint.config.js` 与 `.github/workflows/gate.yml` 被识别并跳过、内容原样保留｜母版自身跑 `install` 不受副作用污染（`.github/` 等未生成）。
+**执法包评估实测（变更 16~19，含一个反例纠偏）**：
+- commitlint 旧 entry 实测 `exit code: 1` + `npx canceled due to missing packages: ["commitlint@21.2.2"]`；改 `@commitlint/cli` 后，坏信息 `update stuff` 被拦（`rc=1`）、合规信息通过（`rc=0`）；缺依赖时报错包名已正确（`@commitlint/cli@21.2.2`）。
+- `commitlint --from <base> --to HEAD` 范围模式实测可用：范围内含坏信息 → `rc=1`，合规 → `rc=0`。
+- gitleaks 调用方式实测：`git --staged` 只覆盖暂存内容（同目录 `dir` 模式检出 3 条时它只检出 1 条），故 CI 改用官方 action 扫全历史。
+- ⚠️ **纠偏登记**：本轮一度据"staged 模式报 no leaks found"判为漏检，复测确认根因是测试用的 `AKIAIOSFODNN7EXAMPLE` 属 gitleaks 内置 allowlist 样例值，**非产品缺陷**；真实格式密钥（`ghp_...`）在 staged 模式下能正常检出（`rc=1`）。结论已按实测更正，不据此改动产品行为。
+- 回归：母版 `verify` rc=0、`check-config` rc=0、`wc -l AGENTS.md`=77；新模板端到端 `install` rc=0、幂等复跑"无文件需要变动" rc=0、`gate.yml` 两处 `branches:` 均正确跟随 §2。
+**瘦身实测（变更 20~21）**：
+- 瘦身项目 `install` rc=0：项目仅落 `AGENTS.md`、`.agents/{project.py,VERSION,.source}`、执法包三份落盘件，共 7 文件约 10KB（原 97KB）。
+- 项目内无 `tsc.py` 时，从技能目录调 `verify --project` rc=0、`check-config --project` rc=0、`status` rc=0（含冗余提示）；cd 进项目后省略 `--project` 亦 rc=0。
+- 旧项目残留 `tsc.py`/`AUDIT-SPEC.md`/`test/` 时 `status` 如实列出"冗余执行逻辑"提示，不代删；母版与技能目录自身扫描不误报。
+- §2 定制复跑 `install` 保留、执法包三份落盘件照常部署。
+- CI 内联门禁实测：绿路径 rc=0（skip 未配置项 + 执行 `TEST_CMD`）；红路径 `TEST_CMD` 退出 7 → 内联脚本 `sys.exit(7)` 原样传递 rc=7。
+- `gate.yml` YAML 解析通过（5 步骤齐全）。
+**归属标记实测（变更 22，沙箱 5 场景 + 母版回归）**：
+- 缺口复现（修复前）：临时上游 `commitlint.config.js` 演进后重跑 `install`，项目文件未更新且报"内容已被项目改过"跳过——证实旧判定把技能部署件误判为用户接管。
+- 场景 1 新装：空项目 `install` rc=0，三份落盘件均带 `tsc-managed` 标记，汇报"执法包新部署"。
+- 场景 2 模板演进：上游模板追加内容后重跑 `install` rc=0，项目文件自动更新（`commitlint.config.js` / `.pre-commit-config.yaml` 均到新版），汇报"执法包已随技能模板更新"——原缺口修复。
+- 场景 3 用户接管：删标记行并改内容后 `install`，报"执法包跳过…（技能不覆盖项目接管的文件）"，用户内容原样保留。
+- 场景 4 同版本 sync：无待更新时"已是最新"早退 rc=0；上游 `gate.yml` 再演进后同版本 `sync` 输出"版本相同，但执法包有待更新…继续对齐"并完成更新（早退判定纳入执法包检查）。
+- 场景 5 代际迁移：旧版无标记落盘件（正文与模板一致）经同版本 `sync` 自动升级为带标记托管版。
+- 母版回归：`verify` rc=0、`check-config` rc=0、`wc -l AGENTS.md`=77；母版自身保持不装执法包（上游纯净）。
+**历史条目不改**：v2.1.2 及更早的修订记录按原样保留，其内部的旧路径与 `make verify` 属历史事实。
+**合入后待办验证**：① v3.0.0 对抗回放（`.agents/test/EVAL-SET.md` 回放表待填）；② macOS 侧实跑一次 `install` 与 `verify`，确认与 Windows 结论等价；③ 7 个存量项目的结构迁移（本机：JSF / 量化 / HYT-CAD / HYT-NX / G1 / HYT-MLFXBG / `Documents\提示词`）。
+
 ## v2.1.2（2026-09-08）
 
 **依据**：用户直接提出的新增需求——AI 对用户的交流须用简洁明了的大白话。
