@@ -171,6 +171,49 @@ class EnforceOwnershipTests(unittest.TestCase):
         self.assertEqual(tsc._enforce_actions(REPO, REPO, AGENTS_SAMPLE), ([], [], []))
 
 
+class LegacyMigrationTests(unittest.TestCase):
+    """回归（v3.1.2 A-01）：旧结构迁移不得误搬项目自己的 test/、enforcement/。"""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="tsc-legacy-"))
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+
+    def test_fresh_install_leaves_unrelated_dirs_alone(self):
+        # 从未部署过契约的项目（根目录无 AGENTS.md），根 test/ 是项目自己的，不许搬
+        (self.tmp / "test").mkdir(parents=True)
+        (self.tmp / "test" / "test_user_own.py").write_text("print('own')\n", encoding="utf-8")
+        code, out = run_script("install", "--from", str(REPO), "--project", str(self.tmp))
+        self.assertEqual(code, 0, out)
+        self.assertTrue((self.tmp / "test" / "test_user_own.py").is_file())
+        self.assertNotIn("迁移", out)
+        self.assertFalse((self.tmp / ".agents" / "test").exists())
+
+    def test_contracted_project_own_test_dir_not_migrated(self):
+        # 已部署过契约的项目，不带契约内容签名的 test/ 同样不许搬
+        code, out = run_script("install", "--from", str(REPO), "--project", str(self.tmp))
+        self.assertEqual(code, 0, out)
+        (self.tmp / "test").mkdir()
+        (self.tmp / "test" / "test01x.py").write_text("print('own')\n", encoding="utf-8")
+        code, out = run_script("install", "--from", str(REPO), "--project", str(self.tmp))
+        self.assertEqual(code, 0, out)
+        self.assertTrue((self.tmp / "test" / "test01x.py").is_file())
+        self.assertNotIn("迁移", out)
+
+    def test_old_layout_with_signatures_migrates(self):
+        # 真·旧结构（v2 布局：根 AGENTS.md + 带契约签名的 test/、enforcement/）照常迁移
+        (self.tmp / "AGENTS.md").write_text(AGENTS_SAMPLE, encoding="utf-8")
+        (self.tmp / "test").mkdir()
+        (self.tmp / "test" / "EVAL-SET.md").write_text("x\n", encoding="utf-8")
+        (self.tmp / "enforcement").mkdir()
+        (self.tmp / "enforcement" / "gate.yml").write_text("x\n", encoding="utf-8")
+        code, out = run_script("install", "--from", str(REPO), "--project", str(self.tmp))
+        self.assertEqual(code, 0, out)
+        self.assertTrue((self.tmp / ".agents" / "test" / "EVAL-SET.md").is_file())
+        self.assertTrue((self.tmp / ".agents" / "enforcement" / "gate.yml").is_file())
+        self.assertFalse((self.tmp / "test").exists())
+        self.assertFalse((self.tmp / "enforcement").exists())
+
+
 class InstallSyncE2ETests(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp(prefix="tsc-e2e-"))

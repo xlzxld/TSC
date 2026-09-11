@@ -269,12 +269,33 @@ def local_version(proj_root):
 # --------------------------------------------------------------------------- #
 # 旧结构迁移（只移动，不删除）
 # --------------------------------------------------------------------------- #
-LEGACY_ENTRIES = ["AUDIT-SPEC.md", "BOOTSTRAP.md", "enforcement", "test"]
+# 旧版契约把 AUDIT-SPEC.md / BOOTSTRAP.md / enforcement/ / test/ 散在项目根目录。
+# 其中 enforcement / test 是通用名，项目自己的同名目录绝不能误搬（v3.1.2 修复）：
+#   1) 项目根必须先有 AGENTS.md（确曾部署过契约）才谈得上"旧结构"；
+#   2) 通用名目录必须带契约内容签名（旧版执法包 / 测试材料特有的文件）才认。
+LEGACY_FILE_ENTRIES = ["AUDIT-SPEC.md", "BOOTSTRAP.md"]
+LEGACY_DIR_SIGNATURES = {
+    "enforcement": ("gate.yml", "Makefile"),
+    "test": (
+        "test_tsc.py",
+        "EVAL-SET.md",
+        "TEST-MANUAL.md",
+        "TEST-ANSWERS.md",
+        "ACCEPTANCE.md",
+    ),
+}
 
 
 def detect_legacy(proj_root):
     proj_root = Path(proj_root)
-    return [n for n in LEGACY_ENTRIES if (proj_root / n).exists()]
+    if not (proj_root / AGENTS_MD).is_file():
+        return []  # 从未部署过契约的项目没有"旧结构"可言
+    found = [n for n in LEGACY_FILE_ENTRIES if (proj_root / n).is_file()]
+    for name, signatures in LEGACY_DIR_SIGNATURES.items():
+        subdir = proj_root / name
+        if subdir.is_dir() and any((subdir / s).exists() for s in signatures):
+            found.append(name)
+    return found
 
 
 def detect_skill_only_leftovers(proj_root):
