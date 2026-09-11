@@ -493,6 +493,45 @@ class RobustnessTests(unittest.TestCase):
         self.assertEqual(code, 2)
 
 
+class TransactionalApplyTests(unittest.TestCase):
+    """回归（v3.2.0 P1-03）：install/sync 任一步写盘失败，必须整体回滚不留半更新。"""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="tsc-tx-"))
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+
+    def test_do_apply_rolls_back_on_midway_failure(self):
+        from unittest import mock
+
+        code, out = run_script("install", "--from", str(REPO), "--project", str(self.tmp))
+        self.assertEqual(code, 0, out)
+        agents = self.tmp / "AGENTS.md"
+        original_agents = agents.read_text(encoding="utf-8")
+        marker = "<!-- 项目手改的正文，失败回滚后必须仍在 -->"
+        tampered = original_agents.replace(
+            "# 项目 AI 开发规范 (AGENTS.md)",
+            "# 项目 AI 开发规范 (AGENTS.md)\n\n" + marker, 1)
+        self.assertNotEqual(tampered, original_agents)
+        agents.write_text(tampered, encoding="utf-8")
+        version = self.tmp / ".agents" / "VERSION"
+        version.write_text("0.0.0\n", encoding="utf-8")
+
+        real_write = tsc.write_text_atomic
+
+        def flaky(path, text, dry_run=False):
+            if Path(path).name == "VERSION":
+                raise OSError("模拟中途失败")
+            return real_write(path, text, dry_run)
+
+        with mock.patch.object(tsc, "write_text_atomic", flaky):
+            rc = tsc.do_apply(self.tmp, REPO, False, False)
+        self.assertEqual(rc, 2)
+        # 先写的 AGENTS.md 必须被回滚：手改标记仍在、未被上游内容覆盖
+        self.assertIn(marker, agents.read_text(encoding="utf-8"), "半更新：AGENTS.md 未回滚")
+        self.assertEqual(version.read_text(encoding="utf-8").strip(), "0.0.0")
+        self.assertEqual(list(self.tmp.rglob("*.tsc-tmp")), [])
+
+
 class VerifyAndCheckConfigTests(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp(prefix="tsc-verify-"))
