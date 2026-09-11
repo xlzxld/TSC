@@ -387,6 +387,23 @@ class InstallSyncE2ETests(unittest.TestCase):
         self.assertIn("否，仍有 [自动填充] 占位", out)
 
 
+class StatusTests(unittest.TestCase):
+    """回归（v3.1.2 A-03）：status 对残缺 AGENTS.md 必须如实报告。"""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="tsc-status-"))
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+
+    def test_status_reports_missing_section2(self):
+        proj = self.tmp / "proj"
+        proj.mkdir()
+        (proj / "AGENTS.md").write_text("# T\n\nno section two here\n", encoding="utf-8")
+        code, out = run_script("status", "--from", str(REPO), "--project", str(proj))
+        self.assertEqual(code, 0, out)
+        self.assertIn("找不到 §2 章节", out)
+        self.assertNotIn("是否填好：是", out)
+
+
 class VerifyAndCheckConfigTests(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp(prefix="tsc-verify-"))

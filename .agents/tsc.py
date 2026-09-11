@@ -795,8 +795,13 @@ def cmd_status(proj_root, upstream):
 
     agents_md = proj_root / AGENTS_MD
     if agents_md.is_file():
-        block = section2_text(read_text(agents_md)) or ""
-        say("§2 是否填好：%s" % ("否，仍有 [自动填充] 占位" if "[自动填充]" in block else "是"))
+        block = section2_text(read_text(agents_md))
+        if block is None:
+            say("§2 是否填好：找不到 §2 章节（AGENTS.md 不完整，先人工修复）")
+        elif "[自动填充]" in block:
+            say("§2 是否填好：否，仍有 [自动填充] 占位")
+        else:
+            say("§2 是否填好：是")
 
     project_py = proj_root / AGENTS_DIR / PROJECT_FILE
     say("门禁可跑：%s" % ("是" if project_py.is_file() else "否（缺 .agents/project.py）"))
