@@ -233,8 +233,10 @@ class LegacyMigrationTests(unittest.TestCase):
         (self.tmp / "AGENTS.md").write_text(AGENTS_SAMPLE, encoding="utf-8")
         (self.tmp / "test").mkdir()
         (self.tmp / "test" / "EVAL-SET.md").write_text("x\n", encoding="utf-8")
+        (self.tmp / "test" / "TEST-MANUAL.md").write_text("x\n", encoding="utf-8")
         (self.tmp / "enforcement").mkdir()
         (self.tmp / "enforcement" / "gate.yml").write_text("x\n", encoding="utf-8")
+        (self.tmp / "enforcement" / "Makefile").write_text("x\n", encoding="utf-8")
         code, out = run_script("install", "--from", str(REPO), "--project", str(self.tmp))
         self.assertEqual(code, 0, out)
         self.assertTrue((self.tmp / ".agents" / "test" / "EVAL-SET.md").is_file())
@@ -242,11 +244,27 @@ class LegacyMigrationTests(unittest.TestCase):
         self.assertFalse((self.tmp / "test").exists())
         self.assertFalse((self.tmp / "enforcement").exists())
 
+    def test_single_signature_file_does_not_trigger_migration(self):
+        # 回归（v3.2.0 P2-03）：通用名目录须 ≥2 个契约签名才认，单个同名文件不触发
+        (self.tmp / "AGENTS.md").write_text(AGENTS_SAMPLE, encoding="utf-8")
+        (self.tmp / "test").mkdir()
+        (self.tmp / "test" / "test_tsc.py").write_text("# 恰好同名的项目自己的文件\n", encoding="utf-8")
+        (self.tmp / "enforcement").mkdir()
+        (self.tmp / "enforcement" / "gate.yml").write_text("# 项目自己的 CI\n", encoding="utf-8")
+        code, out = run_script("install", "--from", str(REPO), "--project", str(self.tmp))
+        self.assertEqual(code, 0, out)
+        self.assertNotIn("已迁移", out)
+        self.assertTrue((self.tmp / "test" / "test_tsc.py").is_file())
+        self.assertTrue((self.tmp / "enforcement" / "gate.yml").is_file())
+        self.assertFalse((self.tmp / ".agents" / "test").exists())
+
     def test_dry_run_reports_will_move_not_moved(self):
-        # 回归（v3.1.2 A-05/A-06）：dry-run 不得说"已迁移"，全新安装也不得冒出"版本相同"
+        # 回归（v3.1.2 A-05/A-06 + v3.2.0 P2-03）：dry-run 不得说"已迁移"，
+        # 全新安装也不得冒出"版本相同"；夹具带 ≥2 个签名以触发迁移预览
         (self.tmp / "AGENTS.md").write_text(AGENTS_SAMPLE, encoding="utf-8")
         (self.tmp / "test").mkdir()
         (self.tmp / "test" / "EVAL-SET.md").write_text("x\n", encoding="utf-8")
+        (self.tmp / "test" / "TEST-MANUAL.md").write_text("x\n", encoding="utf-8")
         code, out = run_script(
             "install", "--from", str(REPO), "--project", str(self.tmp), "--dry-run"
         )

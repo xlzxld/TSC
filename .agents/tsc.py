@@ -137,7 +137,7 @@ def write_text_atomic(path, text, dry_run=False):
 # §2 项目区：锚点切分与结构校验
 # --------------------------------------------------------------------------- #
 def split_table_row(line):
-    """按未转义的 | 切分一行 Markdown 表格；\| 视作字面竖线（原样保留，不在此处还原）。
+    r"""按未转义的 | 切分一行 Markdown 表格；\| 视作字面竖线（原样保留，不在此处还原）。
 
     命令里真实的管道（如 `pytest -q | tee t.log`）在 §2 中应写作 `\|`；
     Windows 路径里的孤立反斜杠不受影响。
@@ -165,7 +165,7 @@ def split_table_row(line):
 
 
 def unescape_cell(text):
-    """把表格 cell 里的 \| 还原为字面 |（供与 project.py 的真实命令比较）。"""
+    r"""把表格 cell 里的 \| 还原为字面 |（供与 project.py 的真实命令比较）。"""
     return text.replace("\\|", "|")
 def section2_span(text):
     """返回 §2 章节的 (起始行号, 结束行号)；找不到返回 None。"""
@@ -307,7 +307,8 @@ def local_version(proj_root):
 # 旧版契约把 AUDIT-SPEC.md / BOOTSTRAP.md / enforcement/ / test/ 散在项目根目录。
 # 其中 enforcement / test 是通用名，项目自己的同名目录绝不能误搬（v3.1.2 修复）：
 #   1) 项目根必须先有 AGENTS.md（确曾部署过契约）才谈得上"旧结构"；
-#   2) 通用名目录必须带契约内容签名（旧版执法包 / 测试材料特有的文件）才认。
+#   2) 通用名目录必须带 ≥2 个契约内容签名（旧版执法包/测试材料特有的文件）才认——
+#      单个同名文件（如项目自己恰好有个 test/test_tsc.py）不足以认定（v3.2.0 收紧）。
 LEGACY_FILE_ENTRIES = ["AUDIT-SPEC.md", "BOOTSTRAP.md"]
 LEGACY_DIR_SIGNATURES = {
     "enforcement": ("gate.yml", "Makefile"),
@@ -328,7 +329,8 @@ def detect_legacy(proj_root):
     found = [n for n in LEGACY_FILE_ENTRIES if (proj_root / n).is_file()]
     for name, signatures in LEGACY_DIR_SIGNATURES.items():
         subdir = proj_root / name
-        if subdir.is_dir() and any((subdir / s).exists() for s in signatures):
+        hits = sum(1 for s in signatures if (subdir / s).exists())
+        if subdir.is_dir() and hits >= 2:
             found.append(name)
     return found
 
