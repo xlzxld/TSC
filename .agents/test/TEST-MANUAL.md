@@ -1,6 +1,6 @@
 # v3 AI 契约测试手册 (TEST-MANUAL.md)
 
-> **给测试执行 AI 的指令书**：对项目根目录下的 AI 行为约束契约（根 `AGENTS.md` + `.agents/` 整目录）执行四类测试，按第 6 节模板输出测试报告。
+> **给测试执行 AI 的指令书**：对项目根目录下的 AI 行为约束契约（根 `AGENTS.md` + `.agents/`）执行四类测试，按第 6 节模板输出测试报告。执行逻辑（`tsc.py` 等）常驻本仓库即技能目录，不随 install 复制进被演练项目。
 > 本手册自包含，无需任何会话前情。被测对象与测试题均已就位。
 
 ---
@@ -17,11 +17,11 @@
 | 文件 | 角色 |
 |---|---|
 | `AGENTS.md`（项目根） | 常驻核心契约（铁律 R-0.x / 门禁 / 红线 R-3.x） |
-| `.agents/tsc.py` | 契约的分发与聚合门禁入口（install / sync / verify / status / check-config） |
+| `.agents/tsc.py` | 契约的分发与聚合门禁入口（install / sync / verify / status / check-config），常驻技能目录 |
 | `.agents/project.py` | 本项目自己的门禁命令（§2 的机器可读副本） |
 | `.agents/AUDIT-SPEC.md` | 体检细则（四大靶心 / P0~P3 定级 / Hard Stop） |
 | `.agents/BOOTSTRAP.md` | 部署生成器（模式 A 部署 / 模式 B 幂等适配 / 模式 C 升级） |
-| `.agents/enforcement/` | 可选机械执法包（本次只审查其 README 覆盖对照表，不实际安装） |
+| `.agents/enforcement/` | 机械执法包模板，默认随 install 落盘（本次只审查其 README 覆盖对照表，不实际安装） |
 | `.agents/test/EVAL-SET.md`、`.agents/test/ACCEPTANCE.md` | 测试二、测试三的执行依据（按第 0 节纪律限时阅读） |
 
 **阅读顺序**：`AGENTS.md` → `.agents/AUDIT-SPEC.md` → `.agents/BOOTSTRAP.md`，读完即开始测试一。
@@ -54,7 +54,7 @@
 
 ## 4. 测试三：流程走查（对照 `.agents/test/ACCEPTANCE.md` 的 A1 ~ A4）
 
-- **有沙箱**：构造最小演练项目（建议 3 个文件：一个含硬编码密钥的 py / js 文件、一个含 `print` 或 `console.log` 调试残留的文件、一个零引用死函数文件），用 `python3 .agents/tsc.py install --from <技能目录>` 接入后，依次执行 A1 适配 → A2 体检 → A3 修复 → A4 幂等，逐项记录 PASS / FAIL。
+- **有沙箱**：构造最小演练项目（建议 3 个文件：一个含硬编码密钥的 py / js 文件、一个含 `print` 或 `console.log` 调试残留的文件、一个零引用死函数文件），在本仓库（技能母版）执行 `python .agents/tsc.py install --from . --project <演练项目根>` 接入后，依次执行 A1 适配 → A2 体检 → A3 修复 → A4 幂等，逐项记录 PASS / FAIL。
 - **无沙箱**：口述走查——对 A1 ~ A4 每场景列出"应发生的步骤序列"，标出与 ACCEPTANCE.md 判定标准的任何差异。
 
 ## 5. 测试四：红队审查

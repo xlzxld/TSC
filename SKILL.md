@@ -28,7 +28,7 @@ visibility: "public"
 **不进项目**（留在技能目录，由你直接调用）：`tsc.py`、`AUDIT-SPEC.md`、`BOOTSTRAP.md`、`verify.ps1` / `verify.sh`、`test/`、`enforcement/` 模板原件。
 
 - **技能目录**（即本文件所在目录）就是"上游"。下文用 `<SKILL_DIR>` 指代它。
-- **核心脚本**：`<SKILL_DIR>/.agents/tsc.py`，零第三方依赖，Windows 与 macOS 通用。**它常驻技能目录，不复制进项目**。
+- **核心脚本**：`<SKILL_DIR>/.agents/tsc.py`，零第三方依赖（Windows 已实测；macOS / Linux 仅用标准库、无平台专属调用，待实测）。**它常驻技能目录，不复制进项目**。
 
 ## 一、怎么触发：用户说一句话，其余全是你的事
 
@@ -96,7 +96,7 @@ python3 "<SKILL_DIR>/.agents/tsc.py" check-config --project "<目标项目根>"
 
 - **绝不覆盖 `AGENTS.md` 的 §2**。§2 是项目自己的门禁配置，`sync` 只替换 §2 以外的内容。脚本已内建此规则；**不要**用整文件覆盖的方式"绕过"它。
 - **绝不自动删除文件**。脚本只做移动与提示；任何删除都必须先向用户确认，并附零引用检索证据与回滚方式。
-- **不要手工编辑 `<SKILL_DIR>/.agents/` 下的上游文件**（`tsc.py`、`AUDIT-SPEC.md`、`BOOTSTRAP.md`、`enforcement/`、`test/`、`VERSION`），改上游再同步。项目里已不再有这些文件的副本。
+- **不要手工编辑 `<SKILL_DIR>/.agents/` 下的上游文件**（`tsc.py`、`AUDIT-SPEC.md`、`BOOTSTRAP.md`、`enforcement/`、`test/`、`verify.ps1` / `verify.sh`、`project.example.py`、`VERSION`），改上游再同步。项目里已不再有这些文件的副本。
 - **`.agents/project.py` 是项目自己的**，上游永不覆盖；缺它时 `verify` 会退出 3。
 - 汇报门禁结果必须附**实际执行的命令与退出码**，禁止用"应该没问题"这类措辞。
 - 涉及新增依赖、破坏性 git 操作、改公共配置时，**先停下问用户**。

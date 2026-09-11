@@ -1,14 +1,14 @@
 # 实测验收清单 (ACCEPTANCE.md)
 
 > **用途**：契约全流程实测。在演练项目**新开会话**，按 A1→A4 逐场景执行，全部 PASS 才算验收。
-> **前置**：已执行 `python3 <技能目录>/.agents/tsc.py install --from <技能目录> --project <演练项目>`，落地单元 = 根目录 `AGENTS.md` + `.agents/` 整目录。
+> **前置**：已执行 `python3 <技能目录>/.agents/tsc.py install --from <技能目录> --project <演练项目>`，落地单元 = 根目录 `AGENTS.md` + `.agents/`（`project.py` / `VERSION` / `.source`）+ 执法包三份落盘件。
 
 ## A1 适配（模式 A · 新项目）
 
 | # | 操作 | PASS 判定 |
 |---|---|---|
-| 1 | 对 AI 说"适配 / 初始化规范" | 读取 `.agents/BOOTSTRAP.md`，确认部署单元为根目录 `AGENTS.md` + `.agents/`（2 项）；旧结构由 `sync` 自动迁入 `.agents/`，且**不自动删除任何文件** |
-| 2 | 检查 §2 填充 | §2 表格与 `.agents/project.py` 取值一致（`python3 .agents/tsc.py check-config` 退出码 0），每条命令有来源（探测文件 / 用户确认）且终端实测过退出码 |
+| 1 | 对 AI 说"适配 / 初始化规范" | 读取 `.agents/BOOTSTRAP.md`，确认部署单元 = 根目录 `AGENTS.md` + 项目内 `.agents/` 配置 + 执法包三份落盘件；旧结构由 `sync` 自动迁入 `.agents/`，且**不自动删除任何文件** |
+| 2 | 检查 §2 填充 | §2 表格与 `.agents/project.py` 取值一致（从技能目录执行 `python <技能目录>/.agents/tsc.py check-config --project <演练项目>`，退出码 0），每条命令有来源（探测文件 / 用户确认）且终端实测过退出码 |
 | 3 | `wc -l AGENTS.md` | < 80 行 |
 | 4 | 项目存在基线失败时 | 登记进"已知豁免清单"行，未放宽验证条件 |
 
@@ -25,14 +25,14 @@
 | # | 操作 | PASS 判定 |
 |---|---|---|
 | 1 | 说"修复 A-01"（体检出的任一 ID） | 先跑基线，再动手 |
-| 2 | 看产出 | 最小改动 + 回归测试 + 门禁全绿（`python3 .agents/tsc.py verify`）+ 原子提交（Conventional Commits） |
+| 2 | 看产出 | 最小改动 + 回归测试 + 门禁全绿（verify 从技能目录以 `--project` 执行）+ 原子提交（Conventional Commits） |
 | 3 | 涉及删除 / 依赖变更时 | 触发 🟡 停下等确认，附零引用检索证据与回滚命令 |
 
 ## A4 适配幂等（模式 B · 已有契约）
 
 | # | 操作 | PASS 判定 |
 |---|---|---|
-| 1 | 对已适配项目再说"适配" | `sync` 报"已是最新"（版本号相同即跳过），或仅重算 §2 表格并输出 diff；§2 的内容原样保留 |
+| 1 | 对已适配项目再说"适配" | `sync` 在版本相同且无待办（执法包无待更新、无旧结构残留）时报"已是最新"早退；或仅重算 §2 表格并输出 diff；§2 的内容原样保留 |
 | 2 | 检查其他节 | §0 / §1 / §3 / §4 / §5 未被触碰 |
 
 ## 验收登记
