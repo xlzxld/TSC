@@ -126,7 +126,7 @@ BUILD_CMD     = None          # 没有就写 None
 | `.pre-commit-config.yaml` | 项目根（同名） | 本地 gitleaks 密钥扫描 + commitlint |
 | `commitlint.config.js` | 项目根 | Conventional Commits 规则 |
 
-已存在且被项目改过的文件**不会被覆盖**，脚本只提示并跳过。
+三份落盘件都带 `tsc-managed` 标记行，按标记决定归属：**带标记 = 技能托管**，`install` / `sync` 时随上游模板自动覆盖更新；**不带标记且内容与模板不同 = 项目已接管**，技能永不覆盖只提示（想换最新模板就自行备份后删掉该文件重跑 `install`）。
 
 落盘后还剩两件人工的事：① 先 `pip install pre-commit` + `npm i -D @commitlint/cli @commitlint/config-conventional`，再跑 `pre-commit install && pre-commit install --hook-type commit-msg` 激活本地钩子；② 在 GitHub 开分支保护。细节见技能目录里的 `.agents/enforcement/README.md`。
 

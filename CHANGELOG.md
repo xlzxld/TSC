@@ -27,6 +27,7 @@
 | 19 | 执法包文档补"三层各拦什么"对照表与**已知限制**（密钥扫描是模式匹配、默认规则覆盖不到自定义内网域名/连接串；fork PR 的 base sha 可能取不到） | `.agents/enforcement/README.md` | 同上 |
 | 20 | **执行逻辑不再复制进项目（瘦身）**：`collect_payload` 只分发 `VERSION`，项目内 `.agents/` 仅剩 `project.py` / `VERSION` / `.source`（约 10KB，原 97KB）；`tsc.py` / `AUDIT-SPEC.md` / `BOOTSTRAP.md` / `verify.*` / `test/` / `enforcement/` 模板原件常驻技能目录，调用一律 `tsc.py <子命令> --project <项目根>`；`status` 对旧项目残留的执行逻辑只提示不删（R-3.4），扫描目标为上游/技能目录自身时不误报 | `.agents/tsc.py`、`SKILL.md`、`README.md`、`使用手册.md`、`AGENTS.md` §2 尾注与 §5、`.agents/BOOTSTRAP.md`、`.agents/verify.ps1`、`.agents/verify.sh` | 用户观点："技能已装在平台上，没必要再复制到其他项目中"——判断成立（执行逻辑部分），但 `AGENTS.md` / `project.py` / 钩子与 CI 落盘件必须留在项目：平台只自动读项目根 `AGENTS.md`；门禁命令跨项目不通用；git 钩子与 CI 只认项目自己的文件 |
 | 21 | **CI 聚合门禁改为内联实现**：`gate.yml` 的 verify 步骤不再调 `.agents/tsc.py`（瘦身项目里已无此文件，且 CI runner 无技能目录、不应引入对私有技能仓库的 token 依赖），改为内联 Python 直接读 `.agents/project.py`（唯一命令源）逐条执行 | `.agents/enforcement/gate.yml` | 变更 20 的必然后果；命令单源仍是 `project.py`，聚合壳本地/CI 各一套但读同一源 |
+| 22 | **执法包归属标记（tsc-managed）**：三份模板各加一行 `# tsc-managed`（`commitlint.config.js` 用 `//`）标记；`deploy_enforcement` 改按标记判归属并返回 `(新部署, 已更新, 跳过)` 三元组——带标记 = 技能托管随上游自动覆盖；不带标记但正文一致（忽略标记行与 gate.yml 分支名，归一化比较）= 旧版部署一次性升级为托管版；不带标记且正文不同 = 项目接管永不覆盖只提示。**修复缺口：上游模板演进后，旧版部署的落盘件被误判"内容已被项目改过"而永远跳过**（沙箱实测复现：临时上游改 `commitlint.config.js` 后重跑 `install`，项目文件未更新且报跳过）；汇报区分"新部署 / 已更新 / 跳过"三类 | `.agents/tsc.py`、`.agents/enforcement/{gate.yml,.pre-commit-config.yaml,commitlint.config.js,README.md}`、`SKILL.md`、`README.md` | 用户质疑："同步契约这个命令是完整的更新吗？比如执法包或者什么其他的脚本我认为也应该一起更新" |
 
 **版本**：v2.1.2 → v3.0.0（**破坏性结构变更**：文件位置与门禁命令均改变，依赖项目需跑一次 `tsc.py sync` 迁移）。
 **预算**：`AGENTS.md` 77 行（< 80 行门禁，`wc -l` LF 计，余量 3 行）；规则数 21 条不变。
@@ -45,6 +46,14 @@
 - §2 定制复跑 `install` 保留、执法包三份落盘件照常部署。
 - CI 内联门禁实测：绿路径 rc=0（skip 未配置项 + 执行 `TEST_CMD`）；红路径 `TEST_CMD` 退出 7 → 内联脚本 `sys.exit(7)` 原样传递 rc=7。
 - `gate.yml` YAML 解析通过（5 步骤齐全）。
+**归属标记实测（变更 22，沙箱 5 场景 + 母版回归）**：
+- 缺口复现（修复前）：临时上游 `commitlint.config.js` 演进后重跑 `install`，项目文件未更新且报"内容已被项目改过"跳过——证实旧判定把技能部署件误判为用户接管。
+- 场景 1 新装：空项目 `install` rc=0，三份落盘件均带 `tsc-managed` 标记，汇报"执法包新部署"。
+- 场景 2 模板演进：上游模板追加内容后重跑 `install` rc=0，项目文件自动更新（`commitlint.config.js` / `.pre-commit-config.yaml` 均到新版），汇报"执法包已随技能模板更新"——原缺口修复。
+- 场景 3 用户接管：删标记行并改内容后 `install`，报"执法包跳过…（技能不覆盖项目接管的文件）"，用户内容原样保留。
+- 场景 4 同版本 sync：无待更新时"已是最新"早退 rc=0；上游 `gate.yml` 再演进后同版本 `sync` 输出"版本相同，但执法包有待更新…继续对齐"并完成更新（早退判定纳入执法包检查）。
+- 场景 5 代际迁移：旧版无标记落盘件（正文与模板一致）经同版本 `sync` 自动升级为带标记托管版。
+- 母版回归：`verify` rc=0、`check-config` rc=0、`wc -l AGENTS.md`=77；母版自身保持不装执法包（上游纯净）。
 **历史条目不改**：v2.1.2 及更早的修订记录按原样保留，其内部的旧路径与 `make verify` 属历史事实。
 **合入后待办验证**：① v3.0.0 对抗回放（`.agents/test/EVAL-SET.md` 回放表待填）；② macOS 侧实跑一次 `install` 与 `verify`，确认与 Windows 结论等价；③ 7 个存量项目的结构迁移（本机：JSF / 量化 / HYT-CAD / HYT-NX / G1 / HYT-MLFXBG / `Documents\提示词`）。
 

@@ -59,6 +59,9 @@ ENFORCE_DEPLOY = {
     "enforcement/.pre-commit-config.yaml": ".pre-commit-config.yaml",
     "enforcement/commitlint.config.js": "commitlint.config.js",
 }
+# 归属标记：模板里带此标记的落盘件视为"技能托管"，上游模板更新时自动覆盖；
+# 文件里没有此标记且内容对不上模板 → 视为用户已接管，永不覆盖。
+MANAGED_MARKER = "tsc-managed"
 
 # --------------------------------------------------------------------------- #
 # 分发策略：项目里只放"必须躺在项目里"的东西，执行逻辑一律留在技能目录
@@ -319,48 +322,88 @@ def section2_value(block, row_prefix):
     return None
 
 
-def deploy_enforcement(proj_root, upstream, merged_agents_text, dry_run):
-    """把执法包模板落到生效位置，并让 gate.yml 的主干分支名跟随 §2。
+def _enforce_actions(proj_root, upstream, merged_agents_text):
+    """算出执法包落盘动作，不写任何文件（判定单源，供部署与早退检查共用）。
 
-    只做"向上游对齐"：内容与上游模板一致（gate.yml 另按 §2 补分支名）时才覆盖，
-    否则视为项目自己改过，跳过并提示——不擅自改写用户的 CI / 钩子配置。
-    返回 (已落盘列表, 因项目已改而跳过的列表)。
+    归属规则（MANAGED_MARKER = "tsc-managed"）：
+    - 项目文件带标记 → 技能托管：以上游模板为准，内容不同就更新；
+    - 不带标记但正文与模板一致（忽略标记行与 gate.yml 分支名）→ 旧版部署
+      的文件，一次性升级为带标记的托管版；
+    - 不带标记且正文不同 → 项目已接管，永不覆盖，只提示。
+    返回 (新部署, 已更新, 跳过)：
+      部署/更新为 (相对路径, 内容) 列表，跳过为 (相对路径, 原因) 列表。
     """
     proj_root = Path(proj_root)
-    src_root = upstream / AGENTS_DIR
+    src_root = Path(upstream) / AGENTS_DIR
     main_branch = section2_value(section2_text(merged_agents_text), "主干分支")
-    deployed, skipped = [], []
+    deploy, update, skip = [], [], []
+
+    def normalize(text):
+        # 去掉归属标记行，行尾统一，用于"正文是否一致"的比较
+        lines = [ln for ln in text.splitlines() if MANAGED_MARKER not in ln]
+        return "\n".join(lines).rstrip("\n")
+
+    def debranch(text):
+        # 把技能自动部署的分支名归一回模板默认值，供比较用；
+        # 用户手改的其他分支名不会被归一，仍判为"内容不同"。
+        if main_branch:
+            return text.replace("branches: [%s]" % main_branch, "branches: [main]")
+        return text
 
     for rel_src, rel_dst in ENFORCE_DEPLOY.items():
         src = src_root / rel_src
         if not src.is_file():
             continue
         dst = proj_root / rel_dst
-        content = read_text(src)
+        template = read_text(src)
+        content = template
         if rel_src.endswith("gate.yml") and main_branch:
             content = content.replace("branches: [main]", "branches: [%s]" % main_branch)
 
-        if dst.is_file():
-            existing = read_text(dst)
-            if existing == content:
-                continue
-            if rel_src.endswith("gate.yml") and main_branch:
-                # 允许"只有分支名不同"的情形：说明是上一次部署留下的旧分支名
-                if existing.replace("branches: [main]", "branches: [%s]" % main_branch) == content:
-                    pass
-                else:
-                    skipped.append((rel_dst, "内容已被项目改过"))
-                    continue
-            else:
-                skipped.append((rel_dst, "内容已被项目改过"))
-                continue
+        if not dst.is_file():
+            deploy.append((rel_dst, content))
+            continue
 
-        if not dry_run:
+        existing = read_text(dst)
+        if MANAGED_MARKER in existing:
+            # 技能托管：上游模板说了算
+            if existing != content:
+                update.append((rel_dst, content))
+            continue
+
+        # 旧版部署的一次性迁移：正文一致（忽略标记行与分支名）→ 升级为托管版
+        if normalize(debranch(existing)) == normalize(template):
+            update.append((rel_dst, content))
+            continue
+
+        skip.append((rel_dst, "内容已被项目改过"))
+        continue
+
+    return deploy, update, skip
+
+
+def enforcement_pending(proj_root, upstream, merged_agents_text):
+    """同版本早退判定用：执法包还有没有待落盘的动作（新部署或更新）。"""
+    deploy, update, _ = _enforce_actions(proj_root, upstream, merged_agents_text)
+    return bool(deploy or update)
+
+
+def deploy_enforcement(proj_root, upstream, merged_agents_text, dry_run):
+    """把执法包模板落到生效位置（gate.yml 的主干分支名跟随 §2）。
+
+    dry_run 只报告不写盘。返回 (新部署, 已更新, 跳过) 三个名字列表。
+    """
+    deploy, update, skip = _enforce_actions(proj_root, upstream, merged_agents_text)
+    if not dry_run:
+        for rel_dst, content in deploy + update:
+            dst = Path(proj_root) / rel_dst
             dst.parent.mkdir(parents=True, exist_ok=True)
             write_text_atomic(dst, content)
-        deployed.append(rel_dst)
-
-    return deployed, skipped
+    return (
+        [name for name, _ in deploy],
+        [name for name, _ in update],
+        skip,
+    )
 
 
 def do_apply(proj_root, upstream, dry_run, force):
@@ -374,19 +417,7 @@ def do_apply(proj_root, upstream, dry_run, force):
         warn("上游 AGENTS.md 找不到 §2 章节，拒绝继续（防止整文件覆盖）。")
         return EXIT_STATE
 
-    local_ver = local_version(proj_root)
-    up_ver = upstream_version(upstream)
-
-    # 版本相同且没有旧结构待迁移，才是真正的"无事可做"；
-    # 若有旧结构残留，即使版本相同也继续，让 sync 能一次修好布局。
-    legacy_pending = detect_legacy(proj_root)
-    if not force and local_ver and local_ver == up_ver and not legacy_pending:
-        say("已是最新：本项目已是 v%s，无需变动。" % local_ver)
-        return EXIT_OK
-    if legacy_pending:
-        say("版本相同，但检测到旧结构残留，继续执行迁移：%s" % "、".join(legacy_pending))
-
-    # 1) 校验 §2 结构，避免"静默缺字段"
+    # 1) 先合并出目标 AGENTS.md：同版本的早退判定也要用它检查执法包
     if project_agents.is_file():
         proj_text = read_text(project_agents)
         proj_block = section2_text(proj_text)
@@ -407,6 +438,24 @@ def do_apply(proj_root, upstream, dry_run, force):
         merged = compose_agents_md(up_text, proj_text)
     else:
         merged = up_text
+
+    local_ver = local_version(proj_root)
+    up_ver = upstream_version(upstream)
+
+    # 版本相同 + 没有旧结构残留 + 执法包也不待更新，才是真正的"无事可做"。
+    legacy_pending = detect_legacy(proj_root)
+    enforce_pending = False
+    if not force and local_ver and local_ver == up_ver:
+        # 版本没变不等于无事可做：上游模板可能演进了（托管落盘件自动更新）、
+        # 或旧版部署的落盘件还在等一次性迁移。
+        enforce_pending = enforcement_pending(proj_root, upstream, merged)
+        if not enforce_pending and not legacy_pending:
+            say("已是最新：本项目已是 v%s，无需变动。" % local_ver)
+            return EXIT_OK
+        if enforce_pending:
+            say("版本相同，但执法包有待更新（上游模板演进或待迁移），继续对齐。")
+    if legacy_pending:
+        say("版本相同，但检测到旧结构残留，继续执行迁移：%s" % "、".join(legacy_pending))
 
     # 2) 旧结构迁移
     moved, leftover = migrate_legacy(proj_root, dry_run)
@@ -442,8 +491,8 @@ def do_apply(proj_root, upstream, dry_run, force):
                 changed.append(SOURCE_FILE)
         write_version(proj_root / AGENTS_DIR / VERSION_FILE, up_ver or "", dry_run)
 
-        # 执法包模板落盘（gate.yml 的分支名跟随 §2）
-        deployed, enforced_skipped = deploy_enforcement(
+        # 执法包模板落盘（gate.yml 的分支名跟随 §2；归属由 tsc-managed 标记决定）
+        deployed, enforced_updated, enforced_skipped = deploy_enforcement(
             proj_root, upstream, merged, dry_run
         )
 
@@ -475,11 +524,16 @@ def do_apply(proj_root, upstream, dry_run, force):
         say("旧位置已存在同名文件，未处理（请人工确认）：%s" % extra)
 
     if deployed:
-        say("执法包已就位（%s）：" % ("将写入" if dry_run else "已写入"))
+        say("执法包新部署（%s）：" % ("将写入" if dry_run else "已写入"))
         for name in deployed:
             say("  %s" % name)
+    if enforced_updated:
+        say("执法包已随技能模板更新（%s）：" % ("将写入" if dry_run else "已写入"))
+        for name in enforced_updated:
+            say("  %s（带 tsc-managed 标记，视为技能托管）" % name)
     for name, why in enforced_skipped:
-        say("执法包跳过 %s（%s；如需对齐请先自行备份再删掉该项目文件重跑）。" % (name, why))
+        say("执法包跳过 %s（%s；技能不覆盖项目接管的文件。如需对齐最新模板，"
+            "请先自行备份再删掉该项目文件重跑 install）。" % (name, why))
     if deployed and not dry_run:
         say("还需人工做两件事：① 先 pip install pre-commit 与 "
             "npm i -D @commitlint/cli @commitlint/config-conventional，再执行 "
