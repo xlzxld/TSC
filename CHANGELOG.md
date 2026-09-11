@@ -17,10 +17,15 @@
 | 9 | `EVAL-SET.md` 回放记录表补 v3.0.0 行并标"待回放" | `.agents/test/EVAL-SET.md` | 上一轮体检 P2 A-05（合入门禁无记录） |
 | 10 | 可选执法层降级为"默认不启用"：`gate.yml` 的密钥扫描改为"有 `.pre-commit-config.yaml` 才跑"，避免未启用时 CI 直接红 | `.agents/enforcement/gate.yml` | 用户要求"约束不要过多" |
 | 11 | 调用方式修正为"一句话调用"：`SKILL.md` 命令路由改为以自然语言触发词为入口并明确"底层命令由 agent 代跑、用户不敲命令"，`README.md` 第二节与 `使用手册.md` 第四/五节同步改写，命令行降级为 CI/兜底用途 | `SKILL.md`、`README.md`、`使用手册.md` | 用户反馈（2026-09-11）："让我自己敲命令就失去了它作为技能的目的，封装为技能就是为了能够方便调用，一句话的事" |
+| 12 | 触发词收短：接入入口由"给这个项目接入契约"改为**"接入契约"**（4 字），去掉冗余前缀 | `SKILL.md`、`README.md`、`使用手册.md` | 用户反馈："'给这个项目接入契约'太长了，改为'接入契约'" |
+| 13 | **门禁改为 AI 自动执行**：`SKILL.md` 新增 §二「自动执行：这些动作不需要用户开口」——改完文件、提交前、修完每个问题后一律自动跑 `verify`，跑完补 `check-config`；用户不再需要说"跑门禁"，该触发词从路由表移除 | `SKILL.md`、`README.md`、`使用手册.md` | 用户反馈："跑门禁什么的应该由 AI 自动判断自动执行，不必用户说" |
+| 14 | `AGENTS.md` §4「修复 [ID]」行去掉内联命令，改为语义描述"门禁全绿"——契约内不写具体命令，命令单源归 `project.py` / `tsc.py` | `AGENTS.md` | 同上（避免契约正文与命令实现耦合） |
+| 15 | **执法包改为默认安装**：`tsc.py install` 自动把 `enforcement/` 三份模板落到生效位置（`gate.yml` → `.github/workflows/`，另两份 → 项目根），`gate.yml` 的 `branches:` 按 §2「主干分支」自动填；已存在且被项目改过的文件只提示不改写 | `.agents/tsc.py`、`.agents/enforcement/README.md`、`SKILL.md`、`README.md`、`使用手册.md`、`AGENTS.md` §5 | 用户反馈："执法包为什么现在默认不安装，我觉得得安装" |
 
 **版本**：v2.1.2 → v3.0.0（**破坏性结构变更**：文件位置与门禁命令均改变，依赖项目需跑一次 `tsc.py sync` 迁移）。
 **预算**：`AGENTS.md` 77 行（< 80 行门禁，`wc -l` LF 计，余量 3 行）；规则数 21 条不变。
 **未采纳**：上一轮体检 P2 A-06（`TEST-MANUAL.md` 降级模式的 PASS 仍可判"可合入"）——本轮为结构改造，不扩范围；登记备查，下轮处理。
+**本轮新增实测（变更 15）**：`install --dry-run` 不写盘且列出 3 项执法包 ↔ 真跑落盘 3 项（`rc=0`）｜`§2` 主干分支改 `master` 后 `gate.yml` 的 `branches:` 跟随变 `master`｜项目自改的 `commitlint.config.js` 与 `.github/workflows/gate.yml` 被识别并跳过、内容原样保留｜母版自身跑 `install` 不受副作用污染（`.github/` 等未生成）。
 **历史条目不改**：v2.1.2 及更早的修订记录按原样保留，其内部的旧路径与 `make verify` 属历史事实。
 **合入后待办验证**：① v3.0.0 对抗回放（`.agents/test/EVAL-SET.md` 回放表待填）；② macOS 侧实跑一次 `install` 与 `verify`，确认与 Windows 结论等价；③ 7 个存量项目的结构迁移（本机：JSF / 量化 / HYT-CAD / HYT-NX / G1 / HYT-MLFXBG / `Documents\提示词`）。
 

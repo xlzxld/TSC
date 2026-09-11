@@ -40,4 +40,4 @@
 输出三件事：部署/更新了哪些文件；§2 与 `project.py` 各项取值的来源（探测文件 / 用户确认）；遗留未决项清单。
 
 > 禁止使用"AI 将全自动遵守此契约"等话术——契约降低违规概率，机械执法兜住底线：
-> 密钥泄露 → gitleaks（可选的 `.agents/enforcement/.pre-commit-config.yaml` 或 CI）；Conventional Commits → commitlint（同上，可选）；主干保护 → branch protection；闭环验证 → 一条聚合命令 `python3 .agents/tsc.py verify`。
+> 密钥泄露 → gitleaks（`.agents/enforcement/.pre-commit-config.yaml` 已随 `install` 自动落盘，或 CI）；Conventional Commits → commitlint（同上）；主干保护 → branch protection（须人工开）；闭环验证 → 一条聚合命令，由 AI 自动执行。

@@ -63,7 +63,7 @@
 | 触发词 | 动作 |
 |---|---|
 | **体检 / audit / 扫一下代码** | 读取 `.agents/AUDIT-SPEC.md` 执行四大靶心只读扫描；输出 P0~P3 表格后强制停下等确认，严禁修改。 |
-| **修复 [ID]** | 先跑基线 → 最小改动修复 → 附回归测试 → 门禁全绿（`python3 .agents/tsc.py verify`）→ 原子提交；触 🔴 / 🟡 立即停。 |
+| **修复 [ID]** | 先跑基线 → 最小改动修复 → 附回归测试 → 门禁全绿 → 原子提交；触 🔴 / 🟡 立即停。 |
 | **适配 / 初始化规范** | 读取 `.agents/BOOTSTRAP.md`：已存在同版本 AGENTS.md 时仅幂等更新 §2 表格并输出 diff 待确认，禁止全文覆盖；检测到旧版本契约则走 BOOTSTRAP 模式 C 升级。 |
 
 ## 5. 外置文件（按需加载，不常驻）
@@ -72,6 +72,6 @@
 |---|---|
 | `.agents/AUDIT-SPEC.md` | 说"体检"时 |
 | `.agents/BOOTSTRAP.md` | 说"适配 / 初始化规范"或新项目部署时 |
-| `.agents/enforcement/`、`.agents/test/` | 前者在需要 CI / 本地钩子时由人启用；后者仅在验证契约自身时使用（AI 平时不读） |
+| `.agents/enforcement/`、`.agents/test/` | 前者由 `install` 默认落盘到生效位置；后者仅在验证契约自身时使用（AI 平时不读） |
 
 > 深度细则不内联进本文件——挤占高频规则的注意力预算。部署单元 = 根目录 `AGENTS.md` + `.agents/` 整目录（共 2 项），接入与更新统一走 `python3 .agents/tsc.py`。

@@ -4,7 +4,7 @@
 
 用法（在目标项目根目录执行）：
     python3 .agents/tsc.py status                报告状态
-    python3 .agents/tsc.py install --from <上游>  首次接入（写入 AGENTS.md + .agents/）
+    python3 .agents/tsc.py install --from <上游>  首次接入（写入 AGENTS.md + .agents/ + 执法包模板）
     python3 .agents/tsc.py sync [--from <上游>]   按版本比对更新（§2 项目区永不覆盖）
     python3 .agents/tsc.py verify                跑聚合门禁（fmt / lint / test / build）
     python3 .agents/tsc.py check-config          校验 project.py 与 AGENTS.md §2 是否一致
@@ -24,6 +24,7 @@
     - 所有文本读写强制 UTF-8 与 LF，避免 Windows 默认 CRLF 破坏行数门禁口径。
     - 不联网、不调用 git；上游来源只接受本地路径（技能目录本身就是上游）。
     - 绝不自动删除文件；旧结构只做"移动 + 提示"。
+    - 执法包（enforcement/）默认随 install 落盘；已存在且被项目改过的文件只提示、不覆盖。
 """
 
 import argparse
@@ -45,6 +46,14 @@ SOURCE_FILE = ".source"
 PROJECT_FILE = "project.py"
 PROJECT_EXAMPLE = "project.example.py"
 SECTION2_HEADING = "## 2."
+
+# 执法包模板 → 落地位置（默认随 install 一起部署）
+ENFORCE_DIR = "enforcement"
+ENFORCE_DEPLOY = {
+    "enforcement/gate.yml": ".github/workflows/gate.yml",
+    "enforcement/.pre-commit-config.yaml": ".pre-commit-config.yaml",
+    "enforcement/commitlint.config.js": "commitlint.config.js",
+}
 
 
 # --------------------------------------------------------------------------- #
@@ -254,6 +263,66 @@ def collect_payload(upstream):
     return items
 
 
+def section2_value(block, row_prefix):
+    """从 §2 表格取某一行第 3 列（验证条件列之前的那列取值）。找不到返回 None。"""
+    if not block:
+        return None
+    for line in block.split("\n"):
+        stripped = line.strip()
+        if not stripped.startswith("|"):
+            continue
+        cells = [c.strip() for c in stripped.strip("|").split("|")]
+        if len(cells) < 2 or set("".join(cells)) <= set("-: "):
+            continue
+        if cells[0].startswith(row_prefix):
+            return cells[1]
+    return None
+
+
+def deploy_enforcement(proj_root, upstream, merged_agents_text, dry_run):
+    """把执法包模板落到生效位置，并让 gate.yml 的主干分支名跟随 §2。
+
+    只做"向上游对齐"：内容与上游模板一致（gate.yml 另按 §2 补分支名）时才覆盖，
+    否则视为项目自己改过，跳过并提示——不擅自改写用户的 CI / 钩子配置。
+    返回 (已落盘列表, 因项目已改而跳过的列表)。
+    """
+    proj_root = Path(proj_root)
+    src_root = upstream / AGENTS_DIR
+    main_branch = section2_value(section2_text(merged_agents_text), "主干分支")
+    deployed, skipped = [], []
+
+    for rel_src, rel_dst in ENFORCE_DEPLOY.items():
+        src = src_root / rel_src
+        if not src.is_file():
+            continue
+        dst = proj_root / rel_dst
+        content = read_text(src)
+        if rel_src.endswith("gate.yml") and main_branch:
+            content = content.replace("branches: [main]", "branches: [%s]" % main_branch)
+
+        if dst.is_file():
+            existing = read_text(dst)
+            if existing == content:
+                continue
+            if rel_src.endswith("gate.yml") and main_branch:
+                # 允许"只有分支名不同"的情形：说明是上一次部署留下的旧分支名
+                if existing.replace("branches: [main]", "branches: [%s]" % main_branch) == content:
+                    pass
+                else:
+                    skipped.append((rel_dst, "内容已被项目改过"))
+                    continue
+            else:
+                skipped.append((rel_dst, "内容已被项目改过"))
+                continue
+
+        if not dry_run:
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            write_text_atomic(dst, content)
+        deployed.append(rel_dst)
+
+    return deployed, skipped
+
+
 def do_apply(proj_root, upstream, dry_run, force):
     """sync / install 共用的落地逻辑。返回退出码。"""
     proj_root = Path(proj_root)
@@ -332,6 +401,11 @@ def do_apply(proj_root, upstream, dry_run, force):
                 changed.append(SOURCE_FILE)
         write_version(proj_root / AGENTS_DIR / VERSION_FILE, up_ver or "", dry_run)
 
+        # 执法包模板落盘（gate.yml 的分支名跟随 §2）
+        deployed, enforced_skipped = deploy_enforcement(
+            proj_root, upstream, merged, dry_run
+        )
+
     except PermissionError as exc:
         warn("写入失败（文件可能被占用）：%s" % exc)
         warn("请关闭占用该文件的应用后重试。")
@@ -358,6 +432,16 @@ def do_apply(proj_root, upstream, dry_run, force):
             say("  %s → %s" % (src.name, dst.relative_to(proj_root).as_posix()))
     for extra in leftover:
         say("旧位置已存在同名文件，未处理（请人工确认）：%s" % extra)
+
+    if deployed:
+        say("执法包已就位（%s）：" % ("将写入" if dry_run else "已写入"))
+        for name in deployed:
+            say("  %s" % name)
+    for name, why in enforced_skipped:
+        say("执法包跳过 %s（%s；如需对齐请先自行备份再删掉该项目文件重跑）。" % (name, why))
+    if deployed and not dry_run:
+        say("还需人工做两件事：① pre-commit install && pre-commit install --hook-type commit-msg"
+            "；② 开分支保护（见 .agents/enforcement/README.md）。")
 
     if not (proj_root / AGENTS_DIR / PROJECT_FILE).is_file() and not dry_run:
         say("下一步：编辑 .agents/project.py，填入本项目自己的门禁命令。")

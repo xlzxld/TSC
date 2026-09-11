@@ -45,20 +45,20 @@ git -c http.proxy=http://127.0.0.1:7897 -c https.proxy=http://127.0.0.1:7897 \
 
 | 你说 | AI 会做 |
 | --- | --- |
-| "给这个项目接入契约" / `tsc install` | 先 `--dry-run` 给你看将改动什么，你点头后真正写入 |
-| "同步契约" / `tsc sync` | 拉上游最新内容合并，**你的 §2 不会被覆盖** |
-| "跑门禁" / `tsc verify` | 执行聚合门禁并**原样回报命令与退出码** |
-| "契约状态" / `tsc` | 报告接没接入、什么版本、§2 填好没 |
-| "体检" | 全仓只读扫描，输出 P0~P3 问题表后停下等你点单 |
+| **"接入契约"** | 先 `--dry-run` 给你看将改动什么，你点头后真正写入（含执法包） |
+| **"同步契约"** | 拉上游最新内容合并，**你的 §2 不会被覆盖** |
+| **"体检"** | 全仓只读扫描，输出 P0~P3 问题表后停下等你点单 |
+| **"修复 A-01"** | 按表修，改完自动跑门禁，带证据汇报 |
+| **"契约状态"** / `tsc` | 报告接没接入、什么版本、§2 填好没 |
 
-`python` / `python3` 的差异、`--from` 的路径怎么拼，全由 AI 处理，你不用记。
+**跑门禁不需要你说**。AI 每次改完文件会自动跑 `verify`，提交前必须退出码 0 才算完成（这就是 R-0.1 的落地方式）。`python` / `python3` 的差异、路径怎么拼，也全是 AI 的事。
 
 <details>
 <summary>兜底：手敲命令（CI 或 AI 不在场时用）</summary>
 
 ```bash
 python3 .agents/tsc.py status          # 看状态：接没接入、什么版本、§2 填好没
-python3 .agents/tsc.py install --from "<技能目录>"   # 首次接入
+python3 .agents/tsc.py install --from "<技能目录>"   # 首次接入（含执法包）
 python3 .agents/tsc.py sync  --from "<技能目录>"     # 上游更新后同步
 python3 .agents/tsc.py verify          # 跑聚合门禁
 python3 .agents/tsc.py check-config    # 校验 §2 与 project.py 是否同源
@@ -73,14 +73,17 @@ python3 .agents/tsc.py check-config    # 校验 §2 与 project.py 是否同源
 
 ```
 <项目根>/
-├─ AGENTS.md          # 契约本体 + 项目自己的 §2（§2 永不被覆盖）
-└─ .agents/           # 上游整目录同步
+├─ AGENTS.md                       # 契约本体 + 项目自己的 §2（§2 永不被覆盖）
+├─ .pre-commit-config.yaml         # ← 执法包自动落盘
+├─ commitlint.config.js            # ← 执法包自动落盘
+├─ .github/workflows/gate.yml      # ← 执法包自动落盘（CI 门禁）
+└─ .agents/                        # 上游整目录同步
    ├─ VERSION  tsc.py  project.py
    ├─ AUDIT-SPEC.md  BOOTSTRAP.md
    └─ enforcement/  test/
 ```
 
-**根目录从原来的 4 项（3 文档 + 1 目录）降到 2 项。**
+**根目录从原来的 4 项（3 文档 + 1 目录）降到 2 项**——但执法包的三份文件会按上表落到生效位置，那是"生效"而不是"散落"，且由 `install` 自动完成。
 
 ### 接入后必做一次的一件事
 
@@ -106,17 +109,19 @@ BUILD_CMD     = None          # 没有就写 None
 | 2 | IO / 编码 / 权限错误 |
 | 3 | 状态非法（缺 §2、缺 VERSION、找不到上游） |
 
-## 四、可选：机械执法层
+## 四、机械执法层（默认安装）
 
-`.agents/enforcement/` 里的四个文件**不在同步范围**，按需手动启用：
+`.agents/enforcement/` 里的模板由 `install` **自动落到生效位置**，不用手工拷贝：
 
-| 模板 | 放到项目哪里 | 作用 |
+| 模板 | 自动落到 | 作用 |
 | --- | --- | --- |
-| `gate.yml` | `.github/workflows/gate.yml` | PR 上的 CI 门禁 |
+| `gate.yml` | `.github/workflows/gate.yml` | PR 上的 CI 门禁；`branches:` 按 §2「主干分支」自动填 |
 | `.pre-commit-config.yaml` | 项目根（同名） | 本地 gitleaks 密钥扫描 + commitlint |
 | `commitlint.config.js` | 项目根 | Conventional Commits 规则 |
 
-启用前先看 `.agents/enforcement/README.md`。**默认不装**——本地钩子要装 Node 与 Python 两个包，跨三平台最麻烦，CI 已能覆盖密钥扫描与提交信息校验。
+已存在且被项目改过的文件**不会被覆盖**，脚本只提示并跳过。
+
+落盘后还剩两件人工的事：① 跑 `pre-commit install && pre-commit install --hook-type commit-msg` 激活本地钩子（需 Node 与 Python；不想装就靠 CI 兜底）；② 在 GitHub 开分支保护。细节见 `.agents/enforcement/README.md`。
 
 ## 五、维护本仓库（发版）
 
