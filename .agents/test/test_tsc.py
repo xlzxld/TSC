@@ -114,6 +114,16 @@ class Section2Tests(unittest.TestCase):
         dr_cols, _ = tsc.section2_signature(tsc.section2_text(drifted))
         self.assertNotEqual(len(up_cols), len(dr_cols))
 
+    def test_split_table_row_keeps_escaped_pipe(self):
+        # 回归（v3.2.0 P2-01）：\| 是字面竖线，不作为单元格分隔符
+        cells = tsc.split_table_row("| a | b \\| c | d |")
+        self.assertEqual(cells, ["a", "b \\| c", "d"])
+        self.assertEqual(tsc.unescape_cell(cells[1]), "b | c")
+        # 普通行与旧解析等价
+        self.assertEqual(
+            tsc.split_table_row("| 项 | 命令 / 取值 | 验证条件 |"),
+            ["项", "命令 / 取值", "验证条件"])
+
 
 class PathTests(unittest.TestCase):
     def test_passthrough(self):
@@ -560,6 +570,16 @@ class VerifyAndCheckConfigTests(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.tmp, True)
         code, out = run_script("install", "--from", str(REPO), "--project", str(self.tmp))
         assert code == 0, out
+
+    def test_check_config_supports_escaped_pipe_commands(self):
+        # 回归（v3.2.0 P2-01）：§2 命令含管道时用 \| 转义，check-config 不再截断误报
+        (self.tmp / ".agents" / "project.py").write_text(
+            'FMT_CHECK_CMD = None\nLINT_CMD = None\nTEST_CMD = "python -m pytest -q | tee t.log"\nBUILD_CMD = None\n',
+            encoding="utf-8")
+        self._adapted_section2("python -m pytest -q \\| tee t.log")
+        code, out = run_script("check-config", "--project", str(self.tmp))
+        self.assertEqual(code, 0, out)
+        self.assertIn("python -m pytest -q | tee t.log", out)
 
     def test_all_skip_fails_loud(self):
         # 回归（v3.2.0 P1-01）：全未配置从"假绿警告+rc=0"收紧为"失败 rc=3"，与 CI 同口径

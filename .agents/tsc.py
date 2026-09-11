@@ -136,6 +136,37 @@ def write_text_atomic(path, text, dry_run=False):
 # --------------------------------------------------------------------------- #
 # §2 项目区：锚点切分与结构校验
 # --------------------------------------------------------------------------- #
+def split_table_row(line):
+    """按未转义的 | 切分一行 Markdown 表格；\| 视作字面竖线（原样保留，不在此处还原）。
+
+    命令里真实的管道（如 `pytest -q | tee t.log`）在 §2 中应写作 `\|`；
+    Windows 路径里的孤立反斜杠不受影响。
+    """
+    text = line.strip()
+    if text.startswith("|"):
+        text = text[1:]
+    if text.endswith("|"):
+        text = text[:-1]
+    cells, cur, esc = [], [], False
+    for ch in text:
+        if esc:
+            cur.append(ch)
+            esc = False
+        elif ch == "\\":
+            cur.append(ch)
+            esc = True
+        elif ch == "|":
+            cells.append("".join(cur).strip())
+            cur = []
+        else:
+            cur.append(ch)
+    cells.append("".join(cur).strip())
+    return cells
+
+
+def unescape_cell(text):
+    """把表格 cell 里的 \| 还原为字面 |（供与 project.py 的真实命令比较）。"""
+    return text.replace("\\|", "|")
 def section2_span(text):
     """返回 §2 章节的 (起始行号, 结束行号)；找不到返回 None。"""
     lines = text.split("\n")
@@ -170,7 +201,7 @@ def section2_signature(block):
         stripped = line.strip()
         if not stripped.startswith("|"):
             continue
-        cells = [c.strip() for c in stripped.strip("|").split("|")]
+        cells = split_table_row(stripped)
         if cells and set("".join(cells)) <= set("-: "):
             continue  # 表头分隔行
         if not columns:
@@ -384,7 +415,7 @@ def section2_to_placeholder(text):
         if start <= i < end:
             stripped = line.strip()
             if stripped.startswith("|"):
-                cells = [c.strip() for c in stripped.strip("|").split("|")]
+                cells = split_table_row(stripped)
                 if cells and set("".join(cells)) <= set("-: "):
                     out.append(line)  # 表头分隔行
                     continue
@@ -408,7 +439,7 @@ def section2_value(block, row_prefix):
         stripped = line.strip()
         if not stripped.startswith("|"):
             continue
-        cells = [c.strip() for c in stripped.strip("|").split("|")]
+        cells = split_table_row(stripped)
         if len(cells) < 2 or set("".join(cells)) <= set("-: "):
             continue
         if cells[0].startswith(row_prefix):
@@ -800,7 +831,7 @@ def read_section2_values(proj_root):
         stripped = line.strip()
         if not stripped.startswith("|"):
             continue
-        cells = [c.strip() for c in stripped.strip("|").split("|")]
+        cells = split_table_row(stripped)
         if len(cells) < 2:
             continue
         label = cells[0]
@@ -826,7 +857,7 @@ def cmd_check_config(proj_root):
             mismatch.append(key)
             continue
         expected = normalize_value(cfg.get(key))
-        actual = normalize_value(table.get(key, "（§2 缺该行）"))
+        actual = normalize_value(unescape_cell(table.get(key, "（§2 缺该行）")))
         say("%-14s project.py=%-40s §2=%s" % (key, expected, actual))
         if expected != actual:
             mismatch.append(key)
