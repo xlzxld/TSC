@@ -133,10 +133,6 @@ def write_text_atomic(path, text, dry_run=False):
         raise
 
 
-def write_version(path, version, dry_run=False):
-    write_text_atomic(path, version.strip() + "\n", dry_run)
-
-
 # --------------------------------------------------------------------------- #
 # §2 项目区：锚点切分与结构校验
 # --------------------------------------------------------------------------- #
@@ -490,12 +486,6 @@ def _enforce_actions(proj_root, upstream, merged_agents_text):
     return deploy, update, skip
 
 
-def enforcement_pending(proj_root, upstream, merged_agents_text):
-    """同版本早退判定用：执法包还有没有待落盘的动作（新部署或更新）。"""
-    deploy, update, _ = _enforce_actions(proj_root, upstream, merged_agents_text)
-    return bool(deploy or update)
-
-
 def deploy_enforcement(proj_root, upstream, merged_agents_text, dry_run, journal=None):
     """把执法包模板落到生效位置（gate.yml 的主干分支名跟随 §2）。
 
@@ -554,23 +544,30 @@ def do_apply(proj_root, upstream, dry_run, force):
 
     local_ver = local_version(proj_root)
     up_ver = upstream_version(upstream)
-
-    # 版本相同 + 没有旧结构残留 + 执法包不待更新 + .source 记录未失效，才是"无事可做"。
     legacy_pending = detect_legacy(proj_root)
-    enforce_pending = False
-    if not force and local_ver and local_ver == up_ver:
-        # 版本没变不等于无事可做：上游模板可能演进了（托管落盘件自动更新）、
-        # 或旧版部署的落盘件还在等一次性迁移、或 .source 死记录待修正。
-        enforce_pending = enforcement_pending(proj_root, upstream, merged)
-        if (
-            not enforce_pending
-            and not legacy_pending
-            and source_record_current(proj_root, upstream)
-        ):
-            say("已是最新：本项目已是 v%s，无需变动。" % local_ver)
-            return EXIT_OK
-        if enforce_pending:
-            say("版本相同，但执法包有待更新（上游模板演进或待迁移），继续对齐。")
+
+    # 预计算将发生的写入（不落盘）。同步判据 = 逐项内容漂移，版本号只是展示信息：
+    # 上游改了内容但忘 bump 版本，sync 照样把差异写下去（v3.2.0 起）。
+    drift = []
+    if not project_agents.is_file() or read_text(project_agents) != merged:
+        drift.append(AGENTS_MD)
+    for rel, src in collect_payload(upstream):
+        dst = proj_root / rel
+        if not dst.is_file() or read_text(dst) != read_text(src):
+            drift.append(rel.as_posix())
+    example = upstream / AGENTS_DIR / PROJECT_EXAMPLE
+    if example.is_file() and not (proj_root / AGENTS_DIR / PROJECT_FILE).is_file():
+        drift.append((Path(AGENTS_DIR) / PROJECT_FILE).as_posix())
+    if not source_record_current(proj_root, upstream):
+        drift.append((Path(AGENTS_DIR) / SOURCE_FILE).as_posix())
+    deploy, update, enforce_skipped = _enforce_actions(proj_root, upstream, merged)
+    drift.extend(deploy)
+    drift.extend(update)
+    drift.extend(legacy_pending)
+
+    if not force and not drift:
+        say("已是最新：上游 v%s，逐项内容比对无漂移，无需变动。" % up_ver)
+        return EXIT_OK
     if legacy_pending:
         say("检测到旧结构残留，继续执行迁移：%s" % "、".join(legacy_pending))
 

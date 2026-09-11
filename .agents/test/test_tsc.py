@@ -359,6 +359,28 @@ class InstallSyncE2ETests(unittest.TestCase):
             tsc.read_text(self.tmp / ".agents" / ".source").strip(), str(REPO)
         )
 
+    def test_sync_picks_up_content_change_without_version_bump(self):
+        # 回归（v3.2.0 P1-04）：上游改了正文但忘 bump VERSION，sync 也必须把差异写下去
+        code, _ = run_script("install", "--from", str(REPO), "--project", str(self.tmp))
+        self.assertEqual(code, 0)
+        up = self.tmp / "upstream"
+        up.mkdir()
+        shutil.copyfile(REPO / "AGENTS.md", up / "AGENTS.md")
+        shutil.copyfile(REPO / "VERSION", up / "VERSION")
+        (up / ".agents").mkdir()
+        shutil.copyfile(
+            REPO / ".agents" / "project.example.py", up / ".agents" / "project.example.py")
+        t = (up / "AGENTS.md").read_text(encoding="utf-8")
+        t = t.replace(
+            "## 5. 外置文件（按需加载，不常驻）",
+            "## 5. 外置文件（按需加载，不常驻）\n\n<!-- 上游漂移探针 -->", 1)
+        (up / "AGENTS.md").write_text(t, encoding="utf-8")
+        # .source 指向该上游且版本相同——旧逻辑会在此"已是最新"早退，漂移永不落地
+        (self.tmp / ".agents" / ".source").write_text(str(up) + "\n", encoding="utf-8")
+        code, out = run_script("sync", "--from", str(up), "--project", str(self.tmp))
+        self.assertEqual(code, 0, out)
+        self.assertIn("上游漂移探针", (self.tmp / "AGENTS.md").read_text(encoding="utf-8"))
+
     def test_sync_same_version_is_noop(self):
         code, _ = run_script("install", "--from", str(REPO), "--project", str(self.tmp))
         self.assertEqual(code, 0)
