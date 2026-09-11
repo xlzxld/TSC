@@ -1,5 +1,22 @@
 # 变更记录 (CHANGELOG)
 
+## v3.1.2（2026-09-12）
+
+**依据**：用户委托的交付前终审（全仓逐文件精读 + 沙箱实测复现 6 组缺陷场景），经用户确认后全量修复（A-01~A-13）。均为缺陷修复与勘误，无破坏性变更、无契约条款改动。
+
+| # | 变更 | 文件 | 依据发现 |
+|---|---|---|---|
+| 1 | 旧结构迁移加双重门卫：项目根无 `AGENTS.md`（从未部署过契约）不迁移；`enforcement/`、`test/` 等通用名目录须带契约内容签名（`gate.yml`/`Makefile`、`test_tsc.py`/`EVAL-SET.md` 等）才认——修复全新 install 把项目自有 `test/`、`enforcement/` 搬进 `.agents/` 还建议删除的严重缺陷 | `.agents/tsc.py`、`.agents/test/test_tsc.py` | 沙箱实测：空项目放自有 `test/` → 被搬走并提示"可自行删除"（终审 A-01，严重） |
+| 2 | `.source` 一律回写为本次实际使用的上游（覆盖显式 `--from` 换源、空文件两种漏网场景），删除仅判死路径的 `source_record_dead`——修复"显式 `--from` 新上游成功后裸 `sync` 静默降级回旧版本" | `.agents/tsc.py`、`.agents/test/test_tsc.py` | 沙箱实测：换源升级后裸 `sync`，VERSION 从 3.1.1 回落 3.0.0（终审 A-02 严重 / A-04 中等） |
+| 3 | `status` 对完全没有 §2 章节的 AGENTS.md 如实报"找不到 §2 章节"，不再误报"已填好" | `.agents/tsc.py`、`.agents/test/test_tsc.py` | 沙箱实测（终审 A-03，中等） |
+| 4 | do_apply 汇报措辞：`--dry-run` 不再说"已迁移"（改"将迁移到"）；去掉与实际版本状态不符的"版本相同，但检测到旧结构残留"前缀 | `.agents/tsc.py`、`.agents/test/test_tsc.py` | 沙箱实测（终审 A-05/A-06，轻微） |
+| 5 | 健壮性四则：顶层兜底 OSError → 退出码 2（不再裸 traceback）；原子写失败清理 `.tsc-tmp` 残留；§2 占位化按"首个非分隔行"识别表头（去掉对表头字面"项"的依赖）；MSYS 盘根 `/c/` 三字符路径归一 | `.agents/tsc.py`、`.agents/test/test_tsc.py` | 代码定论 + 单测锁定（终审 A-07~A-10，轻微） |
+| 6 | 文档勘误：发版清单"三处版本头"实为六处（补 `enforcement/README.md`、`SKILL.md` frontmatter、`使用手册.md`）；执法包 README 已知限制补 commitlint 全零 SHA 边缘场景 | `README.md`、`使用手册.md`、`.agents/enforcement/README.md` | 逐文件核对（终审 A-11 + 安全备注） |
+| 7 | 补 `v3.1.1` 扁平 tag（发版提交当时漏打，`git tag --list` 取证只到 v3.1.0）；EVAL-SET 回放表补 v3.1.1 / v3.1.2 待回放行 | git tag、`.agents/test/EVAL-SET.md` | 终审 A-12 / A-13 |
+
+**版本**：v3.1.1 → v3.1.2（缺陷修复与勘误，无破坏性变更；AGENTS.md 契约条款未动，仅版本头随发版更新）。
+**本轮实测**：37 个单测全绿（`python -m unittest discover -s .agents/test -p "test_*.py"` rc=0，新增 11 条回归全部先红后绿）｜`verify` rc=0｜`check-config` rc=0｜`wc -l AGENTS.md` = 77（< 80）｜终审 6 组沙箱场景修复后复测全部符合预期。
+
 ## v3.1.1（2026-09-11）
 
 **依据**：v3.1.0 体检报告（P2×1 + P3×6，只读扫描后经用户确认全部修复）+ 外部 AI 复查补充一处（P2-1）。均为缺陷修复与勘误，无破坏性变更、无契约条款改动。

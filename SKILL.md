@@ -6,7 +6,7 @@ description: |
   用于往一个项目里接入或更新契约文件、运行聚合门禁、按契约执行体检与修复流程。
   当用户提到"接入契约""跑契约门禁""契约体检""tsc"时使用本技能。
 agent_created: true
-version: 3.1.1
+version: 3.1.2
 display_name: "TSC 契约"
 display_name_en: "TSC Contract"
 description_zh: "把 AI 行为契约一键接入项目，并提供同步与聚合门禁。"
