@@ -518,18 +518,23 @@ def do_apply(proj_root, upstream, dry_run, force):
             changed.append(rel.as_posix())
 
         agents_dir = proj_root / AGENTS_DIR
-        if not dry_run:
+        # 模板从上游取（项目里不再留 project.example.py）
+        example = upstream / AGENTS_DIR / PROJECT_EXAMPLE
+        project_py = agents_dir / PROJECT_FILE
+        source_file = agents_dir / SOURCE_FILE
+        need_project_py = example.is_file() and not project_py.is_file()
+        need_source = not source_file.is_file()
+        # dry-run 也要计入预览（旧版漏报这两个文件，且汇报路径缺 .agents/ 前缀）
+        if need_project_py:
+            changed.append((Path(AGENTS_DIR) / PROJECT_FILE).as_posix())
+        if need_source:
+            changed.append((Path(AGENTS_DIR) / SOURCE_FILE).as_posix())
+        if not dry_run and (need_project_py or need_source):
             agents_dir.mkdir(parents=True, exist_ok=True)
-            # 模板从上游取（项目里不再留 project.example.py）
-            example = upstream / AGENTS_DIR / PROJECT_EXAMPLE
-            project_py = agents_dir / PROJECT_FILE
-            if example.is_file() and not project_py.is_file():
+            if need_project_py:
                 shutil.copyfile(str(example), str(project_py))
-                changed.append(PROJECT_FILE)
-            source_file = agents_dir / SOURCE_FILE
-            if not source_file.is_file():
+            if need_source:
                 write_version(source_file, str(upstream))
-                changed.append(SOURCE_FILE)
         # VERSION 已随 collect_payload 的载荷循环写入，这里不再重复写
 
         # 执法包模板落盘（gate.yml 的分支名跟随 §2；归属由 tsc-managed 标记决定）

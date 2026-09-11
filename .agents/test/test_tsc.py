@@ -195,6 +195,23 @@ class InstallSyncE2ETests(unittest.TestCase):
         version = (self.tmp / ".agents" / "VERSION").read_text(encoding="utf-8").strip()
         self.assertEqual(version, tsc.upstream_version(REPO))
 
+    def test_install_dry_run_previews_all_seven_files(self):
+        # 回归：dry-run 预览必须列全 7 个将写文件（旧版漏报 project.py 与 .source）
+        code, out = run_script("install", "--from", str(REPO), "--project", str(self.tmp), "--dry-run")
+        self.assertEqual(code, 0, out)
+        self.assertIn("未写入任何文件", out)
+        for rel in [
+            "AGENTS.md",
+            ".agents/VERSION",
+            ".agents/project.py",
+            ".agents/.source",
+            ".github/workflows/gate.yml",
+            ".pre-commit-config.yaml",
+            "commitlint.config.js",
+        ]:
+            self.assertIn(rel, out, "dry-run 漏报 %s" % rel)
+        self.assertEqual(list(self.tmp.rglob("*")), [])  # dry-run 零写盘
+
     def test_sync_same_version_is_noop(self):
         code, _ = run_script("install", "--from", str(REPO), "--project", str(self.tmp))
         self.assertEqual(code, 0)
