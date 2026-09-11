@@ -1,5 +1,19 @@
 # 变更记录 (CHANGELOG)
 
+## v3.1.1（2026-09-11）
+
+**依据**：v3.1.0 体检报告（P2×1 + P3×6，只读扫描后经用户确认全部修复）+ 外部 AI 复查补充一处（P2-1）。均为缺陷修复与勘误，无破坏性变更、无契约条款改动。
+
+| # | 变更 | 文件 | 依据发现 |
+|---|---|---|---|
+| 1 | `install --dry-run` 预览补全：全新安装曾漏报 `.agents/project.py` 与 `.agents/.source`（报 5 项、实际落盘 7 项），且这两个文件在真实安装汇报里缺 `.agents/` 前缀；新增"dry-run 必须列全 7 项且零写盘"回归测试 | `.agents/tsc.py`、`.agents/test/test_tsc.py` | 沙箱 dry-run 实测：预览 5 项 vs `test_install_lands_seven_files` 落盘 7 项（体检 A-01） |
+| 2 | `.source` 死路径回退：技能目录搬家后存量项目 sync/status 不再 rc=3——校验 `.agents/.source` 记录，失效则回退脚本所在仓库并提示；同版本幂等早退为记录修正让路，install/sync 成功后把 `.source` 修正为实际使用的上游（status 只读不改）；README 已知限制同步补充 | `.agents/tsc.py`、`.agents/test/test_tsc.py`、`README.md` | 外部 AI 复查（P2-1，实测 rc=3） |
+| 3 | 文档勘误：执法包 README"本条第信息"错别字、"门禁随 `.agents/` 自动同步"过期表述（v3 起执行逻辑不进项目）；README 已知限制补"同版本仍会比对执法包与旧结构"例外；使用手册不再硬编码"77 行"；CHANGELOG v3.1.0 实测单测数 23 更正为 24 | `README.md`、`使用手册.md`、`CHANGELOG.md`、`.agents/enforcement/README.md` | 体检 A-02、A-03、A-04、A-06、A-07 |
+| 4 | `.agents/verify.sh` 补可执行位（此前 100644，macOS/Linux 克隆后 `./verify.sh` 会 permission denied） | `.agents/verify.sh` | 体检 A-05（`git ls-files -s` 取证） |
+
+**版本**：v3.1.0 → v3.1.1（缺陷修复与勘误，无破坏性变更；AGENTS.md 契约条款未动，仅版本头随发版更新）。
+**本轮实测**：26 个单测全绿（`python -m unittest discover -s .agents/test -p "test_*.py"` rc=0）｜`verify` rc=0｜`check-config` rc=0｜沙箱 dry-run 预览 7 项且零写盘｜沙箱死路径 status rc=0 回退生效、sync 后 `.source` 修正｜`wc -l AGENTS.md` = 77（< 80）。
+
 ## v3.1.0（2026-09-11）
 
 **依据**：用户需求——评估 v2.1.2 与当前版本优劣后全方位优化，最少 6 轮迭代、每轮自评。评估结论：v3.0.0 在部署体积（10KB vs 97KB）、平台兼容（脱离 make）、命令单源（§2 ↔ project.py 交叉校验）、技能化分发四个维度全面优于 v2.1.2，本轮在其上做缺陷修复与加固，无破坏性变更。
