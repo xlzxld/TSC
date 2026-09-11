@@ -1,7 +1,10 @@
 name: gate
 on:
   pull_request:
-    # 改成你的主干分支名（对应 AGENTS.md §2「主干分支」那一行的取值）
+    # 改成你的主干分支名（供 §2「主干分支」那一行取值）
+    # 注意：`tsc.py install` 会自动把这里替换成 AGENTS.md §2 里的主干分支名
+    branches: [main]
+  push:
     branches: [main]
 
 jobs:
@@ -10,20 +13,31 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          fetch-depth: 0        # 密钥扫描要翻历史，必须取全量
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+
       # 按项目技术栈补充运行时安装，例如：
       #   - uses: actions/setup-node@v4
       #     with: { node-version: 20 }
-      - name: Secrets scan (gitleaks) — 仅在启用本地钩子层时执行
+
+      # 密钥扫描：直接用 gitleaks 官方 action 扫全历史。
+      # 不用 pre-commit 跑这一步——那里的 gitleaks 只扫暂存内容，
+      # 在 CI 上等于只扫本次改动的文件，翻不出仓库里已有的旧密钥。
+      - name: 密钥扫描 (gitleaks, 全历史)
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # 提交信息规范：只有存在本地钩子配置且装了依赖时才校验。
+      # 没配就明确跳过（不会让 CI 误判为失败）。
+      - name: 提交信息规范 (commitlint)
+        if: ${{ hashFiles('.pre-commit-config.yaml', 'commitlint.config.js') != '' }}
         run: |
-          if [ -f .pre-commit-config.yaml ]; then
-            pip install pre-commit
-            pre-commit run --all-files
-          else
-            echo "未启用 .pre-commit-config.yaml，跳过密钥扫描（可选层）"
-          fi
-      - name: Verify (fmt-check / lint / test / build)
+          npm i -D @commitlint/cli @commitlint/config-conventional
+          npx --no -- @commitlint/cli --from "${{ github.event.pull_request.base.sha || github.event.before }}" --to "${{ github.sha }}" --verbose
+
+      - name: 聚合门禁 (fmt-check / lint / test / build)
         run: python3 .agents/tsc.py verify

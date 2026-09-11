@@ -121,7 +121,9 @@ BUILD_CMD     = None          # 没有就写 None
 
 已存在且被项目改过的文件**不会被覆盖**，脚本只提示并跳过。
 
-落盘后还剩两件人工的事：① 跑 `pre-commit install && pre-commit install --hook-type commit-msg` 激活本地钩子（需 Node 与 Python；不想装就靠 CI 兜底）；② 在 GitHub 开分支保护。细节见 `.agents/enforcement/README.md`。
+落盘后还剩两件人工的事：① 先 `pip install pre-commit` + `npm i -D @commitlint/cli @commitlint/config-conventional`，再跑 `pre-commit install && pre-commit install --hook-type commit-msg` 激活本地钩子；② 在 GitHub 开分支保护。细节见 `.agents/enforcement/README.md`。
+
+> ⚠️ 本地钩子**不是"装上但没配也能凑合"**：一旦激活，依赖缺失会让提交直接失败（不是自动跳过）。不想被拦就别执行那两条 `install` 命令，只靠 CI 那层。
 
 ## 五、维护本仓库（发版）
 

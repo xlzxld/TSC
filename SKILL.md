@@ -106,9 +106,17 @@ python3 "<目标项目根>/.agents/tsc.py" check-config
 
 落盘后**你要提醒用户两件只能由人做的事**（脚本做不了）：
 
-1. **激活本地钩子**：`pre-commit install && pre-commit install --hook-type commit-msg`
-   （需要 Node 与 Python；用户确实不想装时，告诉它 CI 已能兜底密钥扫描与提交信息校验，跳过不报错。）
-2. **开分支保护**：GitHub → Settings → Branches，按 `.agents/enforcement/README.md` 的四步勾选，
+1. **激活本地钩子**（要先装依赖，否则钩子会拦死提交）：
+   ```bash
+   pip install pre-commit
+   npm i -D @commitlint/cli @commitlint/config-conventional
+   pre-commit install
+   pre-commit install --hook-type commit-msg
+   ```
+   ⚠️ 本地钩子不是软开关：激活后依赖缺失会让 `git commit` 直接失败。用户不想被拦就**别执行**那两条 `install`，只留 CI 那层。
+2. **开分支保护**：GitHub → Settings → Branches，按 `.agents/enforcement/README.md` 的三步勾选，
    其中"Branch name pattern"要与 `AGENTS.md` §2 的「主干分支」取值一致。
 
 `gate.yml` 首次生成时按 §2 的「主干分支」取值自动填好 `branches:`；改过主干名后要重跑 `install` 才会更新这一行。
+
+**三层各拦什么**（被问到时要能说清）：本地钩子只扫**本次暂存**的内容，CI 那一步才是**全历史**密钥扫描。所以"本地绿了"不等于仓库历史干净。

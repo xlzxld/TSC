@@ -440,8 +440,11 @@ def do_apply(proj_root, upstream, dry_run, force):
     for name, why in enforced_skipped:
         say("执法包跳过 %s（%s；如需对齐请先自行备份再删掉该项目文件重跑）。" % (name, why))
     if deployed and not dry_run:
-        say("还需人工做两件事：① pre-commit install && pre-commit install --hook-type commit-msg"
-            "；② 开分支保护（见 .agents/enforcement/README.md）。")
+        say("还需人工做两件事：① 先 pip install pre-commit 与 "
+            "npm i -D @commitlint/cli @commitlint/config-conventional，再执行 "
+            "pre-commit install && pre-commit install --hook-type commit-msg"
+            "（依赖没装好时钩子会拦死提交，不是自动跳过）；"
+            "② 开分支保护（见 .agents/enforcement/README.md）。")
 
     if not (proj_root / AGENTS_DIR / PROJECT_FILE).is_file() and not dry_run:
         say("下一步：编辑 .agents/project.py，填入本项目自己的门禁命令。")
