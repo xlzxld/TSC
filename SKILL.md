@@ -1,0 +1,65 @@
+---
+name: tsc
+description: |
+  项目 AI 行为契约（AGENTS.md + .agents/）的分发、同步与门禁技能。
+  触发词：tsc、/tsc、接入契约、同步契约、契约体检、契约门禁、tsc verify。
+  用于往一个项目里接入或更新契约文件、运行聚合门禁、按契约执行体检与修复流程。
+  当用户提到"接入契约""跑契约门禁""契约体检""tsc"时使用本技能。
+agent_created: true
+version: 3.0.0
+display_name: "TSC 契约"
+display_name_en: "TSC Contract"
+description_zh: "把 AI 行为契约一键接入项目，并提供同步与聚合门禁。"
+description_en: "Install, sync and enforce the AI coding contract in any project."
+visibility: "public"
+---
+
+# TSC 契约技能
+
+本技能把一套 AI 行为契约分发进项目：根目录只落一个 `AGENTS.md`，其余全部收进 `.agents/` 目录。
+
+- **技能目录**（即本文件所在目录）就是"上游"。下文用 `<SKILL_DIR>` 指代它。
+- **核心脚本**：`<SKILL_DIR>/.agents/tsc.py`，零第三方依赖，Windows 与 macOS 通用。
+
+## 一、命令路由
+
+用户说了什么，就执行对应动作。`<目标项目根>` 默认取当前工作目录。
+
+| 用户说 | 执行 |
+| --- | --- |
+| `tsc`、契约状态 | `python3 "<SKILL_DIR>/.agents/tsc.py" status` |
+| `tsc install`、接入契约 | `python3 "<SKILL_DIR>/.agents/tsc.py" install --from "<SKILL_DIR>" --project "<目标项目根>"` |
+| `tsc sync`、同步契约 | `python3 "<SKILL_DIR>/.agents/tsc.py" sync --from "<SKILL_DIR>" --project "<目标项目根>"` |
+| `tsc verify`、跑门禁 | `python3 "<目标项目根>/.agents/tsc.py" verify` |
+| `tsc check-config` | `python3 "<目标项目根>/.agents/tsc.py" check-config` |
+| 体检 | 读 `<目标项目根>/.agents/AUDIT-SPEC.md`，按其铁律执行（**只读**，输出问题清单后立即停） |
+| 修复 X | 读 `<目标项目根>/.agents/AUDIT-SPEC.md` 定级表 + `AGENTS.md` §3 红线，按"先跑基线 → 最小改动 → 回归 → 门禁 → 原子提交"执行 |
+| 适配 | 读 `<目标项目根>/.agents/BOOTSTRAP.md`，按其模式 A/B/C 执行 |
+
+Windows 下把 `python3` 写成 `python`。用户不想记这个差异时，让他敲 `<目标项目根>/.agents/verify.ps1`（Windows）或 `.agents/verify.sh`（macOS）。
+
+## 二、每次动手前先确认三件事
+
+1. **项目根对不对**——改变的是哪个项目，别默认到技能目录自己身上。
+2. **先 `--dry-run`**：`sync` 与 `install` 首次执行时一律先加 `--dry-run` 给用户看将发生什么，得到确认后再真跑。
+3. **退出码要原样回报**——脚本的退出码含义：
+
+| 码 | 含义 | 你要做的 |
+| --- | --- | --- |
+| 0 | 成功 / 已是最新 | 报结论 |
+| 1 | §2 结构有变更，需人工合并 | **停下**，把脚本列出的缺失字段转告用户，等他补完再重跑 |
+| 2 | IO / 编码 / 权限错误 | 停下，原样转述错误 |
+| 3 | 状态非法（缺 §2、缺 VERSION、找不到上游） | 停下，按提示修复 |
+
+## 三、硬约束（来自契约本身，不可豁免）
+
+- **绝不覆盖 `AGENTS.md` 的 §2**。§2 是项目自己的门禁配置，`sync` 只替换 §2 以外的内容。脚本已内建此规则；**不要**用整文件覆盖的方式"绕过"它。
+- **绝不自动删除文件**。脚本只做移动与提示；任何删除都必须先向用户确认，并附零引用检索证据与回滚方式。
+- **不要手工编辑 `.agents/` 下由上游管理的文件**（`tsc.py`、`AUDIT-SPEC.md`、`BOOTSTRAP.md`、`enforcement/`、`test/`、`VERSION`），改上游再同步。
+- **`.agents/project.py` 是项目自己的**，上游永不覆盖；缺它时 `verify` 会退出 3。
+- 汇报门禁结果必须附**实际执行的命令与退出码**，禁止用"应该没问题"这类措辞。
+- 涉及新增依赖、破坏性 git 操作、改公共配置时，**先停下问用户**。
+
+## 四、首次接入后要提醒用户的一件事
+
+`.agents/project.py` 生成时四条命令都是 `None`。要提醒用户填成本项目真实的命令，否则门禁会全程 skip 而给出"全绿"的假结论。填完让他跑一次 `check-config` 确认 `AGENTS.md` §2 与 `project.py` 一致。
