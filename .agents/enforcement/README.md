@@ -79,3 +79,4 @@ pre-commit install --hook-type commit-msg
 - 密钥扫描是**模式匹配**，自定义格式的内网域名、连接串需要自己加规则（gitleaks 的 `--config`），默认规则覆盖不到。
 - 本地钩子依赖 Node 与 Python 两个运行时；只在一个平台开发、且不想装的话，靠 CI 那层即可。
 - `gate.yml` 的提交信息校验在 fork PR 上可能拿不到 base sha，此时该步会跳过；主干 push 与同仓库 PR 正常。
+- `gate.yml` 的 commitlint 在 `github.event.before` 为全零 SHA（新仓库首次推送等场景）时会因比对范围无效而报错（是显式报错，不是静默放行）；属极边缘场景。
