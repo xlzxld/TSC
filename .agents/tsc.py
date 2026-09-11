@@ -367,6 +367,13 @@ def _enforce_actions(proj_root, upstream, merged_agents_text):
     """
     proj_root = Path(proj_root)
     src_root = Path(upstream) / AGENTS_DIR
+    try:
+        if proj_root.resolve() == Path(upstream).resolve():
+            # 母版/技能目录自举：模板原件已在 .agents/enforcement/，
+            # 不往自己根目录铺生效件（保持上游纯净）
+            return [], [], []
+    except OSError:
+        pass
     main_branch = section2_value(section2_text(merged_agents_text), "主干分支")
     if main_branch and PLACEHOLDER in main_branch:
         main_branch = None  # §2 还是占位符（未适配）→ gate.yml 保持模板默认 [main]

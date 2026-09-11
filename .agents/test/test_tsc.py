@@ -166,6 +166,10 @@ class EnforceOwnershipTests(unittest.TestCase):
         self.assertIn("branches: [master]", gate)  # §2 主干分支 = master
         self.assertNotIn("branches: [main]", gate)
 
+    def test_self_target_skips_enforcement(self):
+        # 母版自举不得把执法包铺进自己根目录（保持上游纯净）
+        self.assertEqual(tsc._enforce_actions(REPO, REPO, AGENTS_SAMPLE), ([], [], []))
+
 
 class InstallSyncE2ETests(unittest.TestCase):
     def setUp(self):
