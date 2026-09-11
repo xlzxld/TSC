@@ -1,0 +1,7 @@
+# 本地 Agent 工作区（不属于契约内容）
+.workbuddy/
+
+# 操作系统与编辑器
+.DS_Store
+Thumbs.db
+*.swp

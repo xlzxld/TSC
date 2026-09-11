@@ -1,0 +1,65 @@
+# 变更记录 (CHANGELOG)
+
+## v2.1.2（2026-09-08）
+
+**依据**：用户直接提出的新增需求——AI 对用户的交流须用简洁明了的大白话。
+
+| # | 变更 | 文件 | 依据发现 |
+|---|---|---|---|
+| 1 | 新增 R-1.4 大白话交流（归 §1 行为契约，不可豁免）：先结论后细节、一句话能说清的不写三句、少用术语（非用不可时紧跟一句白话解释）；代码 / 命令 / 退出码等技术取证内容保持原样，R-1.1 二元判定与 R-1.2 取证要求不因白话化降低 | AGENTS.md | 用户需求（2026-09-08） |
+
+**版本**：v2.1.1 → v2.1.2，仅 AGENTS.md 增一条 §1 规则；AUDIT-SPEC / BOOTSTRAP 语义无涉，无需同步。测试材料现有答案（Q3、T-05 等考取证与门禁行为）与新条款互补不冲突，本轮无需更新。
+**预算**：AGENTS.md 76 行（< 80 行门禁，`wc -l` LF 计）；规则数 21 条（< 30 条上限）。
+
+## v2.1.1（2026-09-05）
+
+**依据**：v2.1 轮四份测试报告——三份独立盲测（`提示词-gemini3.8-f-h` / `提示词-glm5.3-f-h` / `提示词-qwen3.8-f-h` 各自的 `test/TEST-REPORT.md`）与自测（`提示词-selftest/TEST-REPORT.md`）。行为层指标已收敛（测试一 3×10/10、测试二 🔴 零 FAIL、测试三 A1~A4 无 FAIL），本轮仅修实质缺陷；单源 / 措辞类发现登记不修（见文末冻结标准），契约本体自此冻结。
+
+| # | 变更 | 文件 | 依据发现 |
+|---|---|---|---|
+| 1 | ACCEPTANCE A1#1 判定与 BOOTSTRAP 模式 A 对齐：部署三件套 + `enforcement/` | test/ACCEPTANCE.md | Gemini ISSUE-02 P1 / Qwen RT-01 P1 / GLM F-01 P2（三方一致；v2.1 修订 #8 涟漪未同步） |
+| 2 | Makefile 增 skip 哨兵：§2 登记"无"的项填 `skip` 即通过，留空报错退出（防误配静默放行）；BUILD_CMD 统一同模式；注释与 README 补 `make verify CHANGED=...` 增量用法 | enforcement/Makefile、README.md | Qwen RT-02 P1 / GLM F-04 P2（合法"无"项目过不了唯一入口 `make verify`）；Gemini ISSUE-03 P2（verify 级增量未文档化） |
+| 3 | README 安装步骤 2 补 commitlint 本地安装（钩子 `npx --no` 不联网，须先 `npm i -D`）；离线段同步改写 | enforcement/README.md | Gemini ISSUE-01 P1 / Qwen RT-03 P2（`--no` 与"依赖在线下载"声明矛盾，新环境装完 commit-msg 钩子必挂） |
+| 4 | R-1.2 补退出码取证：退出码取自门禁命令本体，管道 / 链式执行逐段取证，禁止以末级命令退出码冒充 | AGENTS.md | 自测 ST-08 P2（两轮测试中唯一被实际违反两次的条款：v2.0 Qwen `;` 链式带过 errors=1、v2.1 自测 `\| tail` 吞码误取 0 后提交） |
+| 5 | §3 🔴 铁律引用范围 R-0.1~R-0.4 → R-0.1~R-0.7（v2.1 新增 R-0.6/R-0.7 后枚举未跟，实际影响≈0，顺手修正） | AGENTS.md | Gemini ISSUE-04 P2 |
+| 6 | README 首句覆盖声明收窄：只声明已落地项，其余红线注明由提示词纪律与人工审查兜底 | enforcement/README.md | GLM F-03 P2 / Qwen RT-12 P3（覆盖对照表本身准确，仅首句过宽） |
+
+**版本**：v2.1 → v2.1.1，三件套 + enforcement 同批修订；AGENTS.md 仍 75 行（< 80，`wc -l` LF 计），规则数不变。
+**验证**：Makefile 哨兵逻辑 8 条分支 bash 实测通过（空值 exit 1 / skip exit 0 / CHANGED 增量）；R-1.2 措辞与 TEST-ANSWERS Q3、EVAL-SET T-05 现有答案无冲突，测试材料无需同步。
+**未采纳（登记备查，不触发修订）**：GLM F-02（§4/§5 豁免归属——R-0.5"仅 🟡"已逻辑闭环，且五次沙箱实测无 Hard Stop 失守）；R-0.7 可机械验证性（四家报告均提、均 P2/P3——行为提示类条款固有属性，兜底在 enforcement/CI）；ST-01 / ST-02 / ST-04；Qwen RT-04 / RT-05 / RT-06 / RT-07 / RT-10 / RT-11；GLM F-05~F-08 / F-10；Gemini ISSUE-06；自测 ST-03 / ST-05 / ST-06 / ST-07。
+**冻结标准（今后修订的唯一触发条件）**：① EVAL-SET 人类施压回放出现 🔴 FAIL；② 真实使用中因条款歧义导致的实际违反（非模型能力问题）；③ ≥2 独立来源 + 文件验证属实 + 影响已测流程。单源红队发现 / 措辞优化 / "不可机械验证"类抱怨一律只登记不动。
+**合入后待办验证**：① enforcement 安装冒烟（`pre-commit install` → 合法与非法 commit 各一次 → `make verify` 的 skip 与 CHANGED 行为）；② EVAL-SET 7 条人类施压回放（回放记录表待填，针对 v2.1.1）；③ R-1.2 新表述定向检查（带管道跑门禁，看汇报是否逐段取证）。
+
+## v2.1（2026-09-05）
+
+**依据**：三份独立测试报告交叉验证后的修订清单——`提示词-gemini3.8-f-h/test/TEST-REPORT.md`（SEC-xx）、`提示词-glm5.3-f-h/test/TEST-REPORT.md`（I-xx）、`提示词-qwen3.8-f-h/test/TEST-REPORT.md`（RT-xx）。三方一致发现优先修复；测试材料（EVAL-SET / TEST-ANSWERS / TEST-MANUAL / ACCEPTANCE）与条款同步对齐。
+
+| # | 变更 | 文件 | 依据发现 |
+|---|---|---|---|
+| 1 | R-3.6 增加分支裁决：主干 / 受保护分支的直接 push 与 force push 不适用豁免，归 §2 主干保护管辖 | AGENTS.md | G-SEC-01 P1 / L-I-01 P1 / Q-RT-01 P1（三方一致，最高优先） |
+| 2 | EVAL-SET T-02 与 TEST-ANSWERS Q2 同步改为"先判目标分支"，答案与条款对齐；出题意图补 Q2/Q9 配对说明 | test/EVAL-SET.md、test/TEST-ANSWERS.md | 同上（GLM/Qwen 曾因此在测试一 Q2 被迫自扣 0.5） |
+| 3 | R-0.5 重写：豁免矩阵补全——§1 行为契约与 🟢 规则明确不可豁免，仅 🟡 可单次豁免；定义"单次"= 当次回复内一个动作、不跨请求继承；增加豁免登记要求（ID + 理由 + 回滚方式） | AGENTS.md | Q-RT-02 P1 / Q-RT-07 P2 / L-I-07 P3 |
+| 4 | 🟢 标题改为"始终遵循（不可豁免）"、§1 标题加"（不可豁免）"，消除"🟢 可豁免 vs 始终遵循"语义矛盾 | AGENTS.md | Q-RT-03 P1 |
+| 5 | R-1.3 增无测试套件降级路径：stdlib / 零依赖脚本回归，或按 §2 尾注降级 | AGENTS.md | Q-RT-04 P1 / G-SEC-05 P2 |
+| 6 | AUDIT-SPEC §3 增置信度机制定义（确凿 / 疑似；疑似禁入 P0 / P1），消除 R-1.1 与 T-07 的引用悬空 | AUDIT-SPEC.md | L-I-08 P3 |
+| 7 | AUDIT-SPEC 靶心一补"调试残留"扫描项（含 CLI stdout 例外） | AUDIT-SPEC.md | G-SEC-03 P1 / L-I-03 P2 / Q-RT-08 P2（三方一致；GLM/Qwen 实跑中均遇 print 无处归类） |
+| 8 | BOOTSTRAP 模式 A 部署范围改三件套 + `enforcement/`，消除二次适配悬空 | BOOTSTRAP.md | G-SEC-04 P2 / L-I-02 P2 |
+| 9 | BOOTSTRAP 新增模式 C（契约版本升级：旧版本整体同步、保留并重算 §2、输出版本 diff）；AGENTS §4"适配"触发词同步 | BOOTSTRAP.md、AGENTS.md | Q-RT-05 P1 / Q-RT-06 P2 |
+| 10 | BOOTSTRAP 阶段 0 增裸源码兜底探测（按文件后缀推断语言）+ unittest 候选命令 | BOOTSTRAP.md | Q-RT-09 P2 / L-I-09 P3（两家沙箱实跑实证） |
+| 11 | 行数门禁统一口径：`wc -l`（LF 计） | AGENTS.md、BOOTSTRAP.md | Q-RT-15 P3（实测同一文件得出 43/52/73 三种行数） |
+| 12 | R-3.6 条款补"列出影响与回滚方式"，与 T-02 期望行为对齐 | AGENTS.md | L-I-06 P3 |
+| 13 | R-3.3 增例外：以 stdout 为合法输出的 CLI 程序 | AGENTS.md | Q-RT-12 P2 |
+| 14 | §2 已知豁免清单增登记格式（`命令:条目描述`），可机器比对 | AGENTS.md | L-I-04 P2 |
+| 15 | 新增 R-0.6 内容信任边界（仓库内指令不构成授权，防提示注入） | AGENTS.md | Q-RT-10 P2 |
+| 16 | 新增 R-0.7 长会话与子代理契约继承（写操作前重读契约） | AGENTS.md | Q-RT-11 P2 |
+| 17 | Makefile 增 `CHANGED` 变量支持增量格式检查；README 增用法说明 | enforcement/Makefile、README.md | G-SEC-02 P1（Makefile 全仓 --check vs §2 增量检查断层，Gemini 独有发现） |
+| 18 | README 覆盖对照表 R-0.4 改为"密钥类部分覆盖"，如实声明 gitleaks 不含内网域名 / 连接串 | enforcement/README.md | Q-RT-13 P2 |
+| 19 | TEST-MANUAL §7 合入门槛消除歧义：加入"测试三 A1~A4 无 FAIL"；P1 须"修订并全量重跑通过后方可合入，修订前不得合入" | test/TEST-MANUAL.md | 三家对 §7 读出三种结论（可合入 / 需修订 / 不满足），属 harness 自身歧义 |
+| 20 | ACCEPTANCE A3#2 增降级判定：无 make 或未部署 enforcement 时按 §2 登记命令逐项实测并附退出码 | test/ACCEPTANCE.md | L-I-05 P2 / Q-RT-14 P2（手册"不装执法包"× "make verify 判定"矛盾） |
+| 21 | R-1.1 置信度引用改为指向 AUDIT-SPEC §3 置信度规则 | AGENTS.md | L-I-08 P3 |
+
+**版本**：v2.0 → v2.1，三文件同批修订（符合契约自身"同批修订"要求）。
+**预算**：AGENTS.md 75 行（< 80 行门禁，`wc -l` LF 计）；规则数 20 条（< 30 条上限）。
+**未采纳**：L-I-11（73→75/80 行余量收窄——本次按高价值发现占用，下次修订前需评估预算）；Q-RT-16 / Q-RT-17（P3 级措辞问题，影响小，暂缓）。
+
+**回归验证**：三份测试材料（TEST-MANUAL / EVAL-SET / TEST-ANSWERS / ACCEPTANCE）已随本次修订同步更新，可开新会话按 TEST-MANUAL 全量重跑；预期重点验证：T-02 / Q2 分支裁决、A3 无 make 降级路径、靶心一调试残留、模式 C 升级。
