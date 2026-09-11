@@ -20,7 +20,7 @@
     0  成功 / 已是最新
     1  需要人工合并（§2 结构有变更）或校验不一致
     2  IO / 编码 / 权限错误
-    3  状态非法（缺 §2、缺 VERSION、找不到上游）
+    3  状态非法（缺 §2、缺 VERSION、找不到上游、门禁全未配置）
 
 设计约束：
     - 零第三方依赖，仅用标准库（Windows 已实测；macOS / Linux 待实测）。
@@ -133,13 +133,40 @@ def write_text_atomic(path, text, dry_run=False):
         raise
 
 
-def write_version(path, version, dry_run=False):
-    write_text_atomic(path, version.strip() + "\n", dry_run)
-
-
 # --------------------------------------------------------------------------- #
 # §2 项目区：锚点切分与结构校验
 # --------------------------------------------------------------------------- #
+def split_table_row(line):
+    r"""按未转义的 | 切分一行 Markdown 表格；\| 视作字面竖线（原样保留，不在此处还原）。
+
+    命令里真实的管道（如 `pytest -q | tee t.log`）在 §2 中应写作 `\|`；
+    Windows 路径里的孤立反斜杠不受影响。
+    """
+    text = line.strip()
+    if text.startswith("|"):
+        text = text[1:]
+    if text.endswith("|"):
+        text = text[:-1]
+    cells, cur, esc = [], [], False
+    for ch in text:
+        if esc:
+            cur.append(ch)
+            esc = False
+        elif ch == "\\":
+            cur.append(ch)
+            esc = True
+        elif ch == "|":
+            cells.append("".join(cur).strip())
+            cur = []
+        else:
+            cur.append(ch)
+    cells.append("".join(cur).strip())
+    return cells
+
+
+def unescape_cell(text):
+    r"""把表格 cell 里的 \| 还原为字面 |（供与 project.py 的真实命令比较）。"""
+    return text.replace("\\|", "|")
 def section2_span(text):
     """返回 §2 章节的 (起始行号, 结束行号)；找不到返回 None。"""
     lines = text.split("\n")
@@ -174,7 +201,7 @@ def section2_signature(block):
         stripped = line.strip()
         if not stripped.startswith("|"):
             continue
-        cells = [c.strip() for c in stripped.strip("|").split("|")]
+        cells = split_table_row(stripped)
         if cells and set("".join(cells)) <= set("-: "):
             continue  # 表头分隔行
         if not columns:
@@ -280,7 +307,8 @@ def local_version(proj_root):
 # 旧版契约把 AUDIT-SPEC.md / BOOTSTRAP.md / enforcement/ / test/ 散在项目根目录。
 # 其中 enforcement / test 是通用名，项目自己的同名目录绝不能误搬（v3.1.2 修复）：
 #   1) 项目根必须先有 AGENTS.md（确曾部署过契约）才谈得上"旧结构"；
-#   2) 通用名目录必须带契约内容签名（旧版执法包 / 测试材料特有的文件）才认。
+#   2) 通用名目录必须带 ≥2 个契约内容签名（旧版执法包/测试材料特有的文件）才认——
+#      单个同名文件（如项目自己恰好有个 test/test_tsc.py）不足以认定（v3.2.0 收紧）。
 LEGACY_FILE_ENTRIES = ["AUDIT-SPEC.md", "BOOTSTRAP.md"]
 LEGACY_DIR_SIGNATURES = {
     "enforcement": ("gate.yml", "Makefile"),
@@ -301,7 +329,8 @@ def detect_legacy(proj_root):
     found = [n for n in LEGACY_FILE_ENTRIES if (proj_root / n).is_file()]
     for name, signatures in LEGACY_DIR_SIGNATURES.items():
         subdir = proj_root / name
-        if subdir.is_dir() and any((subdir / s).exists() for s in signatures):
+        hits = sum(1 for s in signatures if (subdir / s).exists())
+        if subdir.is_dir() and hits >= 2:
             found.append(name)
     return found
 
@@ -322,7 +351,10 @@ def detect_skill_only_leftovers(proj_root):
 
 
 def migrate_legacy(proj_root, dry_run):
-    """把根目录的旧布局搬进 .agents/。返回 (已移动, 建议人工处理)。"""
+    """把根目录的旧布局搬进 .agents/。返回 (已移动, 建议人工处理)。
+
+    搬移中途失败时，先逆序搬回已完成的部分再抛错——调用方据此保证整体原状。
+    """
     proj_root = Path(proj_root)
     agents_dir = proj_root / AGENTS_DIR
     moved, leftover = [], []
@@ -332,10 +364,18 @@ def migrate_legacy(proj_root, dry_run):
         if dst.exists():
             leftover.append(src)
             continue
-        moved.append((src, dst))
         if not dry_run:
             agents_dir.mkdir(parents=True, exist_ok=True)
-            shutil.move(str(src), str(dst))
+            try:
+                shutil.move(str(src), str(dst))
+            except OSError:
+                for s, d in reversed(moved):
+                    try:
+                        shutil.move(str(d), str(s))
+                    except OSError:
+                        pass  # 回滚自身的失败不得掩盖原始错误，原始异常原样抛出
+                raise
+        moved.append((src, dst))
     return moved, leftover
 
 
@@ -377,7 +417,7 @@ def section2_to_placeholder(text):
         if start <= i < end:
             stripped = line.strip()
             if stripped.startswith("|"):
-                cells = [c.strip() for c in stripped.strip("|").split("|")]
+                cells = split_table_row(stripped)
                 if cells and set("".join(cells)) <= set("-: "):
                     out.append(line)  # 表头分隔行
                     continue
@@ -401,7 +441,7 @@ def section2_value(block, row_prefix):
         stripped = line.strip()
         if not stripped.startswith("|"):
             continue
-        cells = [c.strip() for c in stripped.strip("|").split("|")]
+        cells = split_table_row(stripped)
         if len(cells) < 2 or set("".join(cells)) <= set("-: "):
             continue
         if cells[0].startswith(row_prefix):
@@ -479,23 +519,21 @@ def _enforce_actions(proj_root, upstream, merged_agents_text):
     return deploy, update, skip
 
 
-def enforcement_pending(proj_root, upstream, merged_agents_text):
-    """同版本早退判定用：执法包还有没有待落盘的动作（新部署或更新）。"""
-    deploy, update, _ = _enforce_actions(proj_root, upstream, merged_agents_text)
-    return bool(deploy or update)
-
-
-def deploy_enforcement(proj_root, upstream, merged_agents_text, dry_run):
+def deploy_enforcement(proj_root, upstream, merged_agents_text, dry_run, journal=None):
     """把执法包模板落到生效位置（gate.yml 的主干分支名跟随 §2）。
 
-    dry_run 只报告不写盘。返回 (新部署, 已更新, 跳过) 三个名字列表。
+    dry_run 只报告不写盘。journal 传入列表时，每个已写文件以
+    (路径, 原内容或 None=新文件) 记入，供调用方失败回滚。返回 (新部署, 已更新, 跳过) 三个名字列表。
     """
     deploy, update, skip = _enforce_actions(proj_root, upstream, merged_agents_text)
     if not dry_run:
         for rel_dst, content in deploy + update:
             dst = Path(proj_root) / rel_dst
+            original = read_text(dst) if dst.is_file() else None
             dst.parent.mkdir(parents=True, exist_ok=True)
             write_text_atomic(dst, content)
+            if journal is not None:
+                journal.append((dst, original))
     return (
         [name for name, _ in deploy],
         [name for name, _ in update],
@@ -539,34 +577,60 @@ def do_apply(proj_root, upstream, dry_run, force):
 
     local_ver = local_version(proj_root)
     up_ver = upstream_version(upstream)
-
-    # 版本相同 + 没有旧结构残留 + 执法包不待更新 + .source 记录未失效，才是"无事可做"。
     legacy_pending = detect_legacy(proj_root)
-    enforce_pending = False
-    if not force and local_ver and local_ver == up_ver:
-        # 版本没变不等于无事可做：上游模板可能演进了（托管落盘件自动更新）、
-        # 或旧版部署的落盘件还在等一次性迁移、或 .source 死记录待修正。
-        enforce_pending = enforcement_pending(proj_root, upstream, merged)
-        if (
-            not enforce_pending
-            and not legacy_pending
-            and source_record_current(proj_root, upstream)
-        ):
-            say("已是最新：本项目已是 v%s，无需变动。" % local_ver)
-            return EXIT_OK
-        if enforce_pending:
-            say("版本相同，但执法包有待更新（上游模板演进或待迁移），继续对齐。")
+
+    # 预计算将发生的写入（不落盘）。同步判据 = 逐项内容漂移，版本号只是展示信息：
+    # 上游改了内容但忘 bump 版本，sync 照样把差异写下去（v3.2.0 起）。
+    drift = []
+    if not project_agents.is_file() or read_text(project_agents) != merged:
+        drift.append(AGENTS_MD)
+    for rel, src in collect_payload(upstream):
+        dst = proj_root / rel
+        if not dst.is_file() or read_text(dst) != read_text(src):
+            drift.append(rel.as_posix())
+    example = upstream / AGENTS_DIR / PROJECT_EXAMPLE
+    if example.is_file() and not (proj_root / AGENTS_DIR / PROJECT_FILE).is_file():
+        drift.append((Path(AGENTS_DIR) / PROJECT_FILE).as_posix())
+    if not source_record_current(proj_root, upstream):
+        drift.append((Path(AGENTS_DIR) / SOURCE_FILE).as_posix())
+    deploy, update, enforce_skipped = _enforce_actions(proj_root, upstream, merged)
+    drift.extend(deploy)
+    drift.extend(update)
+    drift.extend(legacy_pending)
+
+    if not force and not drift:
+        say("已是最新：上游 v%s，逐项内容比对无漂移，无需变动。" % up_ver)
+        return EXIT_OK
     if legacy_pending:
         say("检测到旧结构残留，继续执行迁移：%s" % "、".join(legacy_pending))
 
-    # 2) 旧结构迁移
-    moved, leftover = migrate_legacy(proj_root, dry_run)
+    # 2) 写盘（带内存日志：任一步失败，已写入的部分整体回滚为操作前原状）
+    journal = []  # (路径, 原内容；None 表示本操作新建的文件)
 
-    # 3) 写盘
+    def journal_write(dst, text, journal=journal, dry_run=dry_run):
+        dst = Path(dst)
+        original = read_text(dst) if dst.is_file() else None
+        write_text_atomic(dst, text, dry_run)
+        if not dry_run:
+            journal.append((dst, original))
+
+    def rollback_journal(journal=journal):
+        # 尽力恢复；单文件恢复失败只如实列出，不掩盖原始错误
+        problems = []
+        for dst, original in reversed(journal):
+            try:
+                if original is None:
+                    dst.unlink()
+                else:
+                    write_text_atomic(dst, original)
+            except OSError as exc:
+                problems.append("%s（%s）" % (dst, exc))
+        return problems
+
     try:
         changed = []
         if not project_agents.is_file() or read_text(project_agents) != merged:
-            write_text_atomic(project_agents, merged, dry_run)
+            journal_write(project_agents, merged)
             changed.append(AGENTS_MD)
 
         for rel, src in collect_payload(upstream):
@@ -575,7 +639,7 @@ def do_apply(proj_root, upstream, dry_run, force):
                 continue
             if not dry_run:
                 dst.parent.mkdir(parents=True, exist_ok=True)
-                write_text_atomic(dst, read_text(src))
+                journal_write(dst, read_text(src))
             changed.append(rel.as_posix())
 
         agents_dir = proj_root / AGENTS_DIR
@@ -595,22 +659,40 @@ def do_apply(proj_root, upstream, dry_run, force):
         if not dry_run and (need_project_py or need_source):
             agents_dir.mkdir(parents=True, exist_ok=True)
             if need_project_py:
+                original = read_text(project_py) if project_py.is_file() else None
                 shutil.copyfile(str(example), str(project_py))
+                journal.append((project_py, original))
             if need_source:
-                write_version(source_file, str(upstream))
+                journal_write(source_file, str(upstream) + "\n")
         # VERSION 已随 collect_payload 的载荷循环写入，这里不再重复写
 
         # 执法包模板落盘（gate.yml 的分支名跟随 §2；归属由 tsc-managed 标记决定）
         deployed, enforced_updated, enforced_skipped = deploy_enforcement(
-            proj_root, upstream, merged, dry_run
+            proj_root, upstream, merged, dry_run, journal=journal
         )
 
     except PermissionError as exc:
-        warn("写入失败（文件可能被占用）：%s" % exc)
+        problems = rollback_journal()
+        warn("写入失败（文件可能被占用），已回滚本次全部改动：%s" % exc)
+        for p in problems:
+            warn("  回滚未彻底，请人工检查：%s" % p)
         warn("请关闭占用该文件的应用后重试。")
         return EXIT_IO
     except OSError as exc:
-        warn("写入失败：%s" % exc)
+        problems = rollback_journal()
+        warn("写入失败，已回滚本次全部改动：%s" % exc)
+        for p in problems:
+            warn("  回滚未彻底，请人工检查：%s" % p)
+        return EXIT_IO
+
+    # 3) 旧结构迁移（放在所有写盘成功之后：失败也只是"目标未完成"，不会先搬走旧目录）
+    try:
+        moved, leftover = migrate_legacy(proj_root, dry_run)
+    except OSError as exc:
+        problems = rollback_journal()
+        warn("旧结构迁移失败，已回滚本次全部写入：%s" % exc)
+        for p in problems:
+            warn("  回滚未彻底，请人工检查：%s" % p)
         return EXIT_IO
 
     # 4) 汇报
@@ -714,10 +796,10 @@ def cmd_verify(proj_root):
             warn("%s 未通过，停在此处。门禁结论：失败（退出码 %d）" % (label, code))
             return code
     if ran == 0:
-        warn("四条门禁命令均未配置，本次没有真正执行任何检查——这个\"全绿\"是假绿。")
+        warn("四条门禁命令均未配置，本次没有真正执行任何检查——这个\"全绿\"是假绿，未配置不是通过。")
         warn("请编辑 .agents/project.py 填入真实命令（AGENTS.md §2 与之同步）。")
-        say("门禁结论：无可执行项（假绿，退出码 0）")
-        return EXIT_OK
+        warn("门禁结论：未配置（退出码 %d）" % EXIT_STATE)
+        return EXIT_STATE
     say("门禁结论：全绿（退出码 0）")
     return EXIT_OK
 
@@ -751,7 +833,7 @@ def read_section2_values(proj_root):
         stripped = line.strip()
         if not stripped.startswith("|"):
             continue
-        cells = [c.strip() for c in stripped.strip("|").split("|")]
+        cells = split_table_row(stripped)
         if len(cells) < 2:
             continue
         label = cells[0]
@@ -777,7 +859,7 @@ def cmd_check_config(proj_root):
             mismatch.append(key)
             continue
         expected = normalize_value(cfg.get(key))
-        actual = normalize_value(table.get(key, "（§2 缺该行）"))
+        actual = normalize_value(unescape_cell(table.get(key, "（§2 缺该行）")))
         say("%-14s project.py=%-40s §2=%s" % (key, expected, actual))
         if expected != actual:
             mismatch.append(key)

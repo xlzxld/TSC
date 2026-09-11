@@ -1,5 +1,27 @@
 # 变更记录 (CHANGELOG)
 
+# 变更记录 (CHANGELOG)
+
+## v3.2.0（2026-09-12）
+
+**依据**：外部深度评审《TSC_项目深度评审_v3.1.2.md》（4 项 P1 + 3 项 P2 逐条核实属实），经用户确认后全量落地。**语义收紧两处**（全 skip 判失败、同步判据改内容漂移），故升 minor 版本。
+
+| # | 变更 | 文件 | 依据发现 |
+|---|---|---|---|
+| 1 | **CI/本地同口径**：门禁四项全未配置从"警告+rc=0"收紧为"失败 rc=3"——本地 `verify` 与 CI 内联壳同时改，CI 不再出现零检查假绿 | `.agents/tsc.py`、`.agents/enforcement/gate.yml`、`SKILL.md`、`README.md`、`使用手册.md` | 评审 P1-01（沙箱红→绿实测） |
+| 2 | **CI 增加同源校验**：内联壳在执行门禁前先比对 AGENTS.md §2 与 project.py，不一致 rc=1 拦下（§2 未适配时跳过，让零门禁 rc=3 给出可行动信号）；抽取内联真身与本地 `check-config` 做同判定对照测试，防两套壳漂移 | `.agents/enforcement/gate.yml`、`.agents/test/test_tsc.py` | 评审 P1-02 |
+| 3 | **install/sync 事务化**：写盘带内存日志，任一步失败整体回滚为操作前原状；旧结构迁移挪到全部写盘成功之后（先搬走旧目录的窗口消除）；迁移自身中途失败也逆序搬回 | `.agents/tsc.py` | 评审 P1-03（mock 中途失败，红→绿实测回滚） |
+| 4 | **同步判据从版本号改为内容漂移**：sync/install 预计算全部写入，逐项字节比对（正文/VERSION/project.py/.source/执法包/旧结构），零漂移才"已是最新"；上游忘 bump 版本不再静默漏同步。删除仅剩单一调用点的 `enforcement_pending`/`write_version`（零引用检索取证） | `.agents/tsc.py`、`.agents/test/test_tsc.py` | 评审 P1-04（未采纳评审的 .fingerprint 方案：逐项直比即指纹，少一个状态文件） |
+| 5 | **§2 表格解析支持 `\|` 转义**：新增 `split_table_row`/`unescape_cell`，含管道的命令（`pytest -q \| tee t.log`）不再被截断误报；check-config 比较层还原转义 | `.agents/tsc.py`、`.agents/test/test_tsc.py` | 评审 P2-01（截断复现实测） |
+| 6 | **旧结构目录签名须 ≥2 命中**：项目自有 `test/test_tsc.py` 单文件不再触发迁移；真旧结构（4+ 材料文件）不受影响 | `.agents/tsc.py`、`.agents/test/test_tsc.py` | 评审 P2-03 |
+| 7 | **CI 供应链固化**：checkout/setup-python/gitleaks-action 固定到 commit SHA（附 tag 注释），commitlint 钉 21.2.2（v3.0.0 实测版本）；新增模板级 lint 测试（`uses:` 必须为 40 位 SHA、禁浮动 `@vN`） | `.agents/enforcement/gate.yml`、`.agents/test/test_tsc.py` | 评审 P2-02（SHA 经 GitHub API 实查，未臆造） |
+
+**未采纳**：评审"测试分层提速"建议——本机 48 用例约 5 秒，e2e 走真子进程是刻意保真；评审".fingerprint 文件"方案——由变更 4 的直比替代。
+**行为变化须知**：① 全未配置项目 `verify`/CI 现在失败（rc=3）——这是"未配置不是通过"的显式化；② sync 不再看版本号，看内容。
+
+**版本**：v3.1.3 → v3.2.0（minor：门禁与同步语义收紧）。
+**本轮实测**：48 个单测全绿（新增 11 条，核心行为变化全部先红后绿）｜`verify` rc=0｜`check-config` rc=0｜`wc -l AGENTS.md` = 77。
+
 ## v3.1.3（2026-09-12）
 
 **依据**：存量项目升级执行中发现的新缺陷（用户委托的全量升级任务中实测触发）。无契约条款改动。

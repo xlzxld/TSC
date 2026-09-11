@@ -14,6 +14,7 @@
 """
 
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -66,6 +67,24 @@ def run_script(*args):
     return proc.returncode, out
 
 
+def gate_inline_source():
+    """从 gate.yml 抽取内联 Python（模拟 YAML run:| 折叠后的效果：去公共缩进）。
+
+    CI 聚合壳与本地 tsc.py 是"同一命令源的两套执行壳"，此抽取器让测试
+    能直接执行 CI 侧真身，防止两套壳判定漂移。
+    """
+    lines = tsc.read_text(REPO / ".agents" / "enforcement" / "gate.yml").split("\n")
+    starts = [i for i, ln in enumerate(lines) if "<<'PYEOF'" in ln]
+    assert len(starts) == 1, "gate.yml 应恰好含一个内联 Python heredoc"
+    body = []
+    for ln in lines[starts[0] + 1:]:
+        if ln.strip() == "PYEOF":
+            break
+        body.append(ln)
+    indent = min(len(ln) - len(ln.lstrip()) for ln in body if ln.strip())
+    return "\n".join(ln[indent:] for ln in body)
+
+
 class Section2Tests(unittest.TestCase):
     def test_span_and_text(self):
         span = tsc.section2_span(AGENTS_SAMPLE)
@@ -94,6 +113,16 @@ class Section2Tests(unittest.TestCase):
         )
         dr_cols, _ = tsc.section2_signature(tsc.section2_text(drifted))
         self.assertNotEqual(len(up_cols), len(dr_cols))
+
+    def test_split_table_row_keeps_escaped_pipe(self):
+        # 回归（v3.2.0 P2-01）：\| 是字面竖线，不作为单元格分隔符
+        cells = tsc.split_table_row("| a | b \\| c | d |")
+        self.assertEqual(cells, ["a", "b \\| c", "d"])
+        self.assertEqual(tsc.unescape_cell(cells[1]), "b | c")
+        # 普通行与旧解析等价
+        self.assertEqual(
+            tsc.split_table_row("| 项 | 命令 / 取值 | 验证条件 |"),
+            ["项", "命令 / 取值", "验证条件"])
 
 
 class PathTests(unittest.TestCase):
@@ -204,8 +233,10 @@ class LegacyMigrationTests(unittest.TestCase):
         (self.tmp / "AGENTS.md").write_text(AGENTS_SAMPLE, encoding="utf-8")
         (self.tmp / "test").mkdir()
         (self.tmp / "test" / "EVAL-SET.md").write_text("x\n", encoding="utf-8")
+        (self.tmp / "test" / "TEST-MANUAL.md").write_text("x\n", encoding="utf-8")
         (self.tmp / "enforcement").mkdir()
         (self.tmp / "enforcement" / "gate.yml").write_text("x\n", encoding="utf-8")
+        (self.tmp / "enforcement" / "Makefile").write_text("x\n", encoding="utf-8")
         code, out = run_script("install", "--from", str(REPO), "--project", str(self.tmp))
         self.assertEqual(code, 0, out)
         self.assertTrue((self.tmp / ".agents" / "test" / "EVAL-SET.md").is_file())
@@ -213,11 +244,27 @@ class LegacyMigrationTests(unittest.TestCase):
         self.assertFalse((self.tmp / "test").exists())
         self.assertFalse((self.tmp / "enforcement").exists())
 
+    def test_single_signature_file_does_not_trigger_migration(self):
+        # 回归（v3.2.0 P2-03）：通用名目录须 ≥2 个契约签名才认，单个同名文件不触发
+        (self.tmp / "AGENTS.md").write_text(AGENTS_SAMPLE, encoding="utf-8")
+        (self.tmp / "test").mkdir()
+        (self.tmp / "test" / "test_tsc.py").write_text("# 恰好同名的项目自己的文件\n", encoding="utf-8")
+        (self.tmp / "enforcement").mkdir()
+        (self.tmp / "enforcement" / "gate.yml").write_text("# 项目自己的 CI\n", encoding="utf-8")
+        code, out = run_script("install", "--from", str(REPO), "--project", str(self.tmp))
+        self.assertEqual(code, 0, out)
+        self.assertNotIn("已迁移", out)
+        self.assertTrue((self.tmp / "test" / "test_tsc.py").is_file())
+        self.assertTrue((self.tmp / "enforcement" / "gate.yml").is_file())
+        self.assertFalse((self.tmp / ".agents" / "test").exists())
+
     def test_dry_run_reports_will_move_not_moved(self):
-        # 回归（v3.1.2 A-05/A-06）：dry-run 不得说"已迁移"，全新安装也不得冒出"版本相同"
+        # 回归（v3.1.2 A-05/A-06 + v3.2.0 P2-03）：dry-run 不得说"已迁移"，
+        # 全新安装也不得冒出"版本相同"；夹具带 ≥2 个签名以触发迁移预览
         (self.tmp / "AGENTS.md").write_text(AGENTS_SAMPLE, encoding="utf-8")
         (self.tmp / "test").mkdir()
         (self.tmp / "test" / "EVAL-SET.md").write_text("x\n", encoding="utf-8")
+        (self.tmp / "test" / "TEST-MANUAL.md").write_text("x\n", encoding="utf-8")
         code, out = run_script(
             "install", "--from", str(REPO), "--project", str(self.tmp), "--dry-run"
         )
@@ -340,6 +387,28 @@ class InstallSyncE2ETests(unittest.TestCase):
             tsc.read_text(self.tmp / ".agents" / ".source").strip(), str(REPO)
         )
 
+    def test_sync_picks_up_content_change_without_version_bump(self):
+        # 回归（v3.2.0 P1-04）：上游改了正文但忘 bump VERSION，sync 也必须把差异写下去
+        code, _ = run_script("install", "--from", str(REPO), "--project", str(self.tmp))
+        self.assertEqual(code, 0)
+        up = self.tmp / "upstream"
+        up.mkdir()
+        shutil.copyfile(REPO / "AGENTS.md", up / "AGENTS.md")
+        shutil.copyfile(REPO / "VERSION", up / "VERSION")
+        (up / ".agents").mkdir()
+        shutil.copyfile(
+            REPO / ".agents" / "project.example.py", up / ".agents" / "project.example.py")
+        t = (up / "AGENTS.md").read_text(encoding="utf-8")
+        t = t.replace(
+            "## 5. 外置文件（按需加载，不常驻）",
+            "## 5. 外置文件（按需加载，不常驻）\n\n<!-- 上游漂移探针 -->", 1)
+        (up / "AGENTS.md").write_text(t, encoding="utf-8")
+        # .source 指向该上游且版本相同——旧逻辑会在此"已是最新"早退，漂移永不落地
+        (self.tmp / ".agents" / ".source").write_text(str(up) + "\n", encoding="utf-8")
+        code, out = run_script("sync", "--from", str(up), "--project", str(self.tmp))
+        self.assertEqual(code, 0, out)
+        self.assertIn("上游漂移探针", (self.tmp / "AGENTS.md").read_text(encoding="utf-8"))
+
     def test_sync_same_version_is_noop(self):
         code, _ = run_script("install", "--from", str(REPO), "--project", str(self.tmp))
         self.assertEqual(code, 0)
@@ -392,7 +461,9 @@ class InstallSyncE2ETests(unittest.TestCase):
         gate = tsc.read_text(self.tmp / ".github" / "workflows" / "gate.yml")
         self.assertIn("branches: [main]", gate)
         self.assertNotIn("branches: [无", gate)
-        self.assertNotIn("[自动填充]", gate)
+        for ln in gate.splitlines():
+            if "branches:" in ln:
+                self.assertNotIn("自动填充", ln)
 
     def test_fresh_install_gate_yml_keeps_default_branch(self):
         # 占位符不得流进 gate.yml 的 branches:
@@ -400,7 +471,12 @@ class InstallSyncE2ETests(unittest.TestCase):
         self.assertEqual(code, 0, out)
         gate = (self.tmp / ".github" / "workflows" / "gate.yml").read_text(encoding="utf-8")
         self.assertIn("branches: [main]", gate)
-        self.assertNotIn("[自动填充]", gate)
+        # 不变量收窄到 branches 值：占位符/坏值不得出现在分支配置里
+        # （gate.yml 内联校验代码合法引用"[自动填充]"哨兵串，不属泄漏）
+        for ln in gate.splitlines():
+            if "branches:" in ln:
+                self.assertNotIn("[自动填充]", ln)
+        self.assertNotIn("branches: [[自动填充]]", gate)
 
     def test_status_flags_unfilled_section2(self):
         # 修复回归：§2 全占位时 status 必须报"未填好"，不得误报"是"
@@ -409,6 +485,24 @@ class InstallSyncE2ETests(unittest.TestCase):
         code, out = run_script("status", "--from", str(REPO), "--project", str(self.tmp))
         self.assertEqual(code, 0, out)
         self.assertIn("否，仍有 [自动填充] 占位", out)
+
+
+class GateTemplateTests(unittest.TestCase):
+    """执法包模板自身的静态约束。"""
+
+    def test_gate_yml_pins_action_and_dependency_versions(self):
+        # 回归（v3.2.0 P2-02）：action 固定到 commit SHA，npm 依赖钉明确版本，杜绝浮动引用
+        gate = tsc.read_text(REPO / ".agents" / "enforcement" / "gate.yml")
+        uses_lines = [
+            ln.strip() for ln in gate.splitlines()
+            if "uses:" in ln and not ln.strip().startswith("#")
+        ]
+        self.assertTrue(uses_lines)
+        for ln in uses_lines:
+            self.assertNotRegex(ln, r"uses: \S+@v\d+", "浮动 tag：%s" % ln)
+            self.assertRegex(ln, r"[0-9a-f]{40}", "未钉 SHA：%s" % ln)
+        self.assertIn("@commitlint/cli@21.2.2", gate)
+        self.assertIn("@commitlint/config-conventional@21.2.2", gate)
 
 
 class StatusTests(unittest.TestCase):
@@ -467,6 +561,45 @@ class RobustnessTests(unittest.TestCase):
         self.assertEqual(code, 2)
 
 
+class TransactionalApplyTests(unittest.TestCase):
+    """回归（v3.2.0 P1-03）：install/sync 任一步写盘失败，必须整体回滚不留半更新。"""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="tsc-tx-"))
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+
+    def test_do_apply_rolls_back_on_midway_failure(self):
+        from unittest import mock
+
+        code, out = run_script("install", "--from", str(REPO), "--project", str(self.tmp))
+        self.assertEqual(code, 0, out)
+        agents = self.tmp / "AGENTS.md"
+        original_agents = agents.read_text(encoding="utf-8")
+        marker = "<!-- 项目手改的正文，失败回滚后必须仍在 -->"
+        tampered = original_agents.replace(
+            "# 项目 AI 开发规范 (AGENTS.md)",
+            "# 项目 AI 开发规范 (AGENTS.md)\n\n" + marker, 1)
+        self.assertNotEqual(tampered, original_agents)
+        agents.write_text(tampered, encoding="utf-8")
+        version = self.tmp / ".agents" / "VERSION"
+        version.write_text("0.0.0\n", encoding="utf-8")
+
+        real_write = tsc.write_text_atomic
+
+        def flaky(path, text, dry_run=False):
+            if Path(path).name == "VERSION":
+                raise OSError("模拟中途失败")
+            return real_write(path, text, dry_run)
+
+        with mock.patch.object(tsc, "write_text_atomic", flaky):
+            rc = tsc.do_apply(self.tmp, REPO, False, False)
+        self.assertEqual(rc, 2)
+        # 先写的 AGENTS.md 必须被回滚：手改标记仍在、未被上游内容覆盖
+        self.assertIn(marker, agents.read_text(encoding="utf-8"), "半更新：AGENTS.md 未回滚")
+        self.assertEqual(version.read_text(encoding="utf-8").strip(), "0.0.0")
+        self.assertEqual(list(self.tmp.rglob("*.tsc-tmp")), [])
+
+
 class VerifyAndCheckConfigTests(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp(prefix="tsc-verify-"))
@@ -474,10 +607,86 @@ class VerifyAndCheckConfigTests(unittest.TestCase):
         code, out = run_script("install", "--from", str(REPO), "--project", str(self.tmp))
         assert code == 0, out
 
-    def test_all_skip_reports_fake_green(self):
+    def test_check_config_supports_escaped_pipe_commands(self):
+        # 回归（v3.2.0 P2-01）：§2 命令含管道时用 \| 转义，check-config 不再截断误报
+        (self.tmp / ".agents" / "project.py").write_text(
+            'FMT_CHECK_CMD = None\nLINT_CMD = None\nTEST_CMD = "python -m pytest -q | tee t.log"\nBUILD_CMD = None\n',
+            encoding="utf-8")
+        self._adapted_section2("python -m pytest -q \\| tee t.log")
+        code, out = run_script("check-config", "--project", str(self.tmp))
+        self.assertEqual(code, 0, out)
+        self.assertIn("python -m pytest -q | tee t.log", out)
+
+    def test_all_skip_fails_loud(self):
+        # 回归（v3.2.0 P1-01）：全未配置从"假绿警告+rc=0"收紧为"失败 rc=3"，与 CI 同口径
         code, out = run_script("verify", "--project", str(self.tmp))
-        self.assertEqual(code, 0)
+        self.assertEqual(code, 3, out)
         self.assertIn("假绿", out)
+        self.assertNotIn("门禁结论：全绿", out)
+
+    def test_gate_inline_all_skip_exits_3(self):
+        # 回归（v3.2.0 P1-01）：CI 内联壳必须同样把全 skip 判为失败 rc=3
+        proc = subprocess.run(
+            [sys.executable, "-c", gate_inline_source()],
+            cwd=str(self.tmp), capture_output=True,
+        )
+        combined = (proc.stdout + proc.stderr).decode("utf-8", errors="replace")
+        self.assertEqual(proc.returncode, 3, combined)
+        self.assertIn("假绿", combined)
+
+    def _gate_inline_run(self):
+        return subprocess.run(
+            [sys.executable, "-c", gate_inline_source()],
+            cwd=str(self.tmp), capture_output=True,
+        )
+
+    def _adapted_section2(self, test_cmd):
+        """把全新安装的占位 §2 整表适配为真实取值（测试行用 test_cmd）。"""
+        agents = self.tmp / "AGENTS.md"
+        t = agents.read_text(encoding="utf-8")
+        t = re.sub(r"\| 技术栈 \|[^\n]*\|", "| 技术栈 | Demo | — |", t, count=1)
+        t = re.sub(r"\| 构建 \(Build\) \|[^\n]*\|", "| 构建 (Build) | 无 | ✅ 无构建产物 |", t, count=1)
+        t = re.sub(r"\| 静态检查 \(Lint\) \|[^\n]*\|", "| 静态检查 (Lint) | 无 | ✅ 无 |", t, count=1)
+        t = re.sub(r"\| 格式化 \(Format\) \|[^\n]*\|", "| 格式化 (Format) | 无 | ✅ 无差异 |", t, count=1)
+        t = re.sub(r"\| 主干分支 \|[^\n]*\|", "| 主干分支 | main | ✅ 禁止直推 |", t, count=1)
+        t = re.sub(r"\| 已知豁免清单 \|[^\n]*\|", "| 已知豁免清单 | 无 | 白名单 |", t, count=1)
+        t = re.sub(r"\| 测试 \(Test\) \|[^\n]*\|", "| 测试 (Test) | `%s` | ✅ 全绿 |" % test_cmd, t, count=1)
+        agents.write_text(t, encoding="utf-8")
+        return agents
+
+    def test_gate_inline_flags_config_mismatch(self):
+        # 回归（v3.2.0 P1-02）：§2 与 project.py 不一致时，CI 内联壳必须 rc=1 拦下
+        (self.tmp / ".agents" / "project.py").write_text(
+            'FMT_CHECK_CMD = None\nLINT_CMD = None\nTEST_CMD = "echo from-project-py"\nBUILD_CMD = None\n',
+            encoding="utf-8")
+        self._adapted_section2("echo from-section2")
+        proc = self._gate_inline_run()
+        combined = (proc.stdout + proc.stderr).decode("utf-8", errors="replace")
+        self.assertEqual(proc.returncode, 1, combined)
+        self.assertIn("不一致", combined)
+
+    def test_gate_inline_agrees_with_check_config(self):
+        # 两套壳同判定：同一不一致夹具，本地 check-config 与 CI 内联壳都 rc=1
+        (self.tmp / ".agents" / "project.py").write_text(
+            'FMT_CHECK_CMD = None\nLINT_CMD = None\nTEST_CMD = "echo from-project-py"\nBUILD_CMD = None\n',
+            encoding="utf-8")
+        self._adapted_section2("echo from-section2")
+        code, out = run_script("check-config", "--project", str(self.tmp))
+        self.assertEqual(code, 1, out)
+        proc = self._gate_inline_run()
+        self.assertEqual(proc.returncode, 1)
+
+    def test_gate_inline_consistent_config_runs_gates(self):
+        # 同源且已配置 → 校验通过、命令真实执行、rc=0
+        (self.tmp / ".agents" / "project.py").write_text(
+            'FMT_CHECK_CMD = None\nLINT_CMD = None\nTEST_CMD = "echo gate-ok"\nBUILD_CMD = None\n',
+            encoding="utf-8")
+        self._adapted_section2("echo gate-ok")
+        proc = self._gate_inline_run()
+        combined = (proc.stdout + proc.stderr).decode("utf-8", errors="replace")
+        self.assertEqual(proc.returncode, 0, combined)
+        self.assertIn("同源校验", combined)
+        self.assertIn("gate-ok", combined)
 
     def test_exit_code_passthrough(self):
         # 用辅助脚本规避跨 shell 引号嵌套问题；门禁命令退出码必须原样传递
