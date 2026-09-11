@@ -25,6 +25,8 @@
 | 17 | **修"跳过后靠 CI"的错误说明**：原文写"不想装就跳过、靠 CI 兜底"，实测本地钩子一旦激活，依赖缺失是**报错拦住提交**而非自动跳过。三处文档改为准确描述，并明确"不想被拦就别执行 `pre-commit install`" | `.agents/enforcement/README.md`、`SKILL.md`、`README.md`、`.agents/tsc.py` 提示语 | 同上 |
 | 18 | **CI 密钥扫描改为真正覆盖全历史**：`gate.yml` 去掉"用 pre-commit 跑 gitleaks"（该入口只扫暂存内容，在 CI 上等于只扫本次改动），改用官方 `gitleaks/gitleaks-action@v2` + `fetch-depth: 0`；同时补 `push: main` 触发与 `--from/--to` 范围的 commitlint 校验 | `.agents/enforcement/gate.yml` | 同上 |
 | 19 | 执法包文档补"三层各拦什么"对照表与**已知限制**（密钥扫描是模式匹配、默认规则覆盖不到自定义内网域名/连接串；fork PR 的 base sha 可能取不到） | `.agents/enforcement/README.md` | 同上 |
+| 20 | **执行逻辑不再复制进项目（瘦身）**：`collect_payload` 只分发 `VERSION`，项目内 `.agents/` 仅剩 `project.py` / `VERSION` / `.source`（约 10KB，原 97KB）；`tsc.py` / `AUDIT-SPEC.md` / `BOOTSTRAP.md` / `verify.*` / `test/` / `enforcement/` 模板原件常驻技能目录，调用一律 `tsc.py <子命令> --project <项目根>`；`status` 对旧项目残留的执行逻辑只提示不删（R-3.4），扫描目标为上游/技能目录自身时不误报 | `.agents/tsc.py`、`SKILL.md`、`README.md`、`使用手册.md`、`AGENTS.md` §2 尾注与 §5、`.agents/BOOTSTRAP.md`、`.agents/verify.ps1`、`.agents/verify.sh` | 用户观点："技能已装在平台上，没必要再复制到其他项目中"——判断成立（执行逻辑部分），但 `AGENTS.md` / `project.py` / 钩子与 CI 落盘件必须留在项目：平台只自动读项目根 `AGENTS.md`；门禁命令跨项目不通用；git 钩子与 CI 只认项目自己的文件 |
+| 21 | **CI 聚合门禁改为内联实现**：`gate.yml` 的 verify 步骤不再调 `.agents/tsc.py`（瘦身项目里已无此文件，且 CI runner 无技能目录、不应引入对私有技能仓库的 token 依赖），改为内联 Python 直接读 `.agents/project.py`（唯一命令源）逐条执行 | `.agents/enforcement/gate.yml` | 变更 20 的必然后果；命令单源仍是 `project.py`，聚合壳本地/CI 各一套但读同一源 |
 
 **版本**：v2.1.2 → v3.0.0（**破坏性结构变更**：文件位置与门禁命令均改变，依赖项目需跑一次 `tsc.py sync` 迁移）。
 **预算**：`AGENTS.md` 77 行（< 80 行门禁，`wc -l` LF 计，余量 3 行）；规则数 21 条不变。
@@ -36,6 +38,13 @@
 - gitleaks 调用方式实测：`git --staged` 只覆盖暂存内容（同目录 `dir` 模式检出 3 条时它只检出 1 条），故 CI 改用官方 action 扫全历史。
 - ⚠️ **纠偏登记**：本轮一度据"staged 模式报 no leaks found"判为漏检，复测确认根因是测试用的 `AKIAIOSFODNN7EXAMPLE` 属 gitleaks 内置 allowlist 样例值，**非产品缺陷**；真实格式密钥（`ghp_...`）在 staged 模式下能正常检出（`rc=1`）。结论已按实测更正，不据此改动产品行为。
 - 回归：母版 `verify` rc=0、`check-config` rc=0、`wc -l AGENTS.md`=77；新模板端到端 `install` rc=0、幂等复跑"无文件需要变动" rc=0、`gate.yml` 两处 `branches:` 均正确跟随 §2。
+**瘦身实测（变更 20~21）**：
+- 瘦身项目 `install` rc=0：项目仅落 `AGENTS.md`、`.agents/{project.py,VERSION,.source}`、执法包三份落盘件，共 7 文件约 10KB（原 97KB）。
+- 项目内无 `tsc.py` 时，从技能目录调 `verify --project` rc=0、`check-config --project` rc=0、`status` rc=0（含冗余提示）；cd 进项目后省略 `--project` 亦 rc=0。
+- 旧项目残留 `tsc.py`/`AUDIT-SPEC.md`/`test/` 时 `status` 如实列出"冗余执行逻辑"提示，不代删；母版与技能目录自身扫描不误报。
+- §2 定制复跑 `install` 保留、执法包三份落盘件照常部署。
+- CI 内联门禁实测：绿路径 rc=0（skip 未配置项 + 执行 `TEST_CMD`）；红路径 `TEST_CMD` 退出 7 → 内联脚本 `sys.exit(7)` 原样传递 rc=7。
+- `gate.yml` YAML 解析通过（5 步骤齐全）。
 **历史条目不改**：v2.1.2 及更早的修订记录按原样保留，其内部的旧路径与 `make verify` 属历史事实。
 **合入后待办验证**：① v3.0.0 对抗回放（`.agents/test/EVAL-SET.md` 回放表待填）；② macOS 侧实跑一次 `install` 与 `verify`，确认与 Windows 结论等价；③ 7 个存量项目的结构迁移（本机：JSF / 量化 / HYT-CAD / HYT-NX / G1 / HYT-MLFXBG / `Documents\提示词`）。
 

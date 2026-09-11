@@ -39,5 +39,38 @@ jobs:
           npm i -D @commitlint/cli @commitlint/config-conventional
           npx --no -- @commitlint/cli --from "${{ github.event.pull_request.base.sha || github.event.before }}" --to "${{ github.sha }}" --verbose
 
+      # 聚合门禁：读 .agents/project.py（唯一命令源），逐条执行。
+      # 内联实现而不是调 .agents/tsc.py——执行逻辑常驻技能目录、不进项目，
+      # CI runner 上没有技能目录，也不该为此引入对私有技能仓库的 token 依赖。
       - name: 聚合门禁 (fmt-check / lint / test / build)
-        run: python3 .agents/tsc.py verify
+        run: |
+          python3 - <<'PYEOF'
+          import subprocess, sys
+          from pathlib import Path
+
+          cfg = Path(".agents/project.py")
+          if not cfg.is_file():
+              print("找不到 .agents/project.py，门禁无法执行", file=sys.stderr)
+              sys.exit(3)
+          ns = {"__file__": str(cfg.resolve())}
+          exec(compile(cfg.read_text(encoding="utf-8"), str(cfg), "exec"), ns)
+
+          steps = [
+              ("格式化 (Format)", "FMT_CHECK_CMD"),
+              ("静态检查 (Lint)", "LINT_CMD"),
+              ("测试 (Test)", "TEST_CMD"),
+              ("构建 (Build)", "BUILD_CMD"),
+          ]
+          for label, key in steps:
+              command = ns.get(key)
+              if command in (None, "", "skip"):
+                  print(f"skip: {label}（未配置）")
+                  continue
+              print(f"$ {command}")
+              code = subprocess.run(command, shell=True).returncode
+              print(f"  退出码：{code}")
+              if code != 0:
+                  print(f"{label} 未通过，停在此处。门禁结论：失败（退出码 {code}）")
+                  sys.exit(code)
+          print("门禁结论：全绿（退出码 0）")
+          PYEOF

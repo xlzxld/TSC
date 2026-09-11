@@ -57,7 +57,7 @@ pre-commit install --hook-type commit-msg
 
 ## 日常使用
 
-- AI 完成修改后自动跑 `python3 .agents/tsc.py verify`，全绿才算闭环（AGENTS.md R-0.1）
+- AI 完成修改后自动跑聚合门禁（脚本在技能目录），全绿才算闭环（AGENTS.md R-0.1）
 - 升级 gitleaks：`pre-commit autoupdate`
 - **清理历史里的旧密钥**（本地钩子不管这个）：
   ```bash

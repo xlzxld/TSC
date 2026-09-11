@@ -37,7 +37,7 @@
 | 主干分支 | main | ✅ 禁止未经 Pull Request 直接向主干提交 |
 | 已知豁免清单 | 无 | 唯一合法的基线失败白名单，新增须走 PR；按 `命令:条目描述` 逐条登记，便于机器比对与复核 |
 
-> **无测试套件时**：禁止声明"已完成"；降级为输出手动验证步骤清单并等用户确认。**本节取值属当前项目**，新项目须按 `.agents/BOOTSTRAP.md` 阶段 3 重填，并同步 `.agents/project.py`（`python3 .agents/tsc.py check-config` 校验一致性）。
+> **无测试套件时**：禁止声明"已完成"；降级为输出手动验证步骤清单并等用户确认。**本节取值属当前项目**，新项目须按技能目录的 `.agents/BOOTSTRAP.md` 阶段 3 重填，并同步 `.agents/project.py`（check-config 校验一致性）。
 
 ## 3. 红线
 
@@ -74,4 +74,4 @@
 | `.agents/BOOTSTRAP.md` | 说"适配 / 初始化规范"或新项目部署时 |
 | `.agents/enforcement/`、`.agents/test/` | 前者由 `install` 默认落盘到生效位置；后者仅在验证契约自身时使用（AI 平时不读） |
 
-> 深度细则不内联进本文件——挤占高频规则的注意力预算。部署单元 = 根目录 `AGENTS.md` + `.agents/` 整目录（共 2 项），接入与更新统一走 `python3 .agents/tsc.py`。
+> 深度细则不内联进本文件——挤占高频规则的注意力预算。**部署单元 = 根目录 `AGENTS.md` + 项目内 `.agents/`（仅 `project.py` / `VERSION` / `.source`）+ 执法包三份落盘件**；执行逻辑常驻技能目录，接入与更新由技能统一执行。

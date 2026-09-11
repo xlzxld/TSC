@@ -1,16 +1,19 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""tsc —— 契约分发与门禁的唯一核心脚本。
+"""tsc —— 契约分发与门禁的唯一核心脚本（常驻技能目录）。
 
-用法（在目标项目根目录执行）：
-    python3 .agents/tsc.py status                报告状态
-    python3 .agents/tsc.py install --from <上游>  首次接入（写入 AGENTS.md + .agents/ + 执法包模板）
-    python3 .agents/tsc.py sync [--from <上游>]   按版本比对更新（§2 项目区永不覆盖）
-    python3 .agents/tsc.py verify                跑聚合门禁（fmt / lint / test / build）
-    python3 .agents/tsc.py check-config          校验 project.py 与 AGENTS.md §2 是否一致
+用法（**脚本留在技能目录，用 --project 指定目标项目**）：
+    python3 <技能目录>/.agents/tsc.py status       --project <项目根>
+    python3 <技能目录>/.agents/tsc.py install      --from <技能目录> --project <项目根>
+    python3 <技能目录>/.agents/tsc.py sync         --from <技能目录> --project <项目根>
+    python3 <技能目录>/.agents/tsc.py verify       --project <项目根>
+    python3 <技能目录>/.agents/tsc.py check-config --project <项目根>
+
+    `--project` 省略时取当前工作目录，因此"cd 到项目里再跑"也成立。
 
 通用参数：
     --from <路径>   上游来源（本地路径；目录需含 AGENTS.md、VERSION、.agents/）
+    --project <路径> 目标项目根（默认当前目录）
     --dry-run       只报告将发生的变化，不写任何文件
 
 退出码：
@@ -25,6 +28,8 @@
     - 不联网、不调用 git；上游来源只接受本地路径（技能目录本身就是上游）。
     - 绝不自动删除文件；旧结构只做"移动 + 提示"。
     - 执法包（enforcement/）默认随 install 落盘；已存在且被项目改过的文件只提示、不覆盖。
+    - **不往项目里复制执行逻辑**（本脚本、AUDIT-SPEC、BOOTSTRAP、verify.*、test/），
+      它们常驻技能目录；项目内只留契约（AGENTS.md）、项目配置（project.py）与生效件。
 """
 
 import argparse
@@ -54,6 +59,30 @@ ENFORCE_DEPLOY = {
     "enforcement/.pre-commit-config.yaml": ".pre-commit-config.yaml",
     "enforcement/commitlint.config.js": "commitlint.config.js",
 }
+
+# --------------------------------------------------------------------------- #
+# 分发策略：项目里只放"必须躺在项目里"的东西，执行逻辑一律留在技能目录
+#
+# 不进项目（留在技能/上游目录，由 agent 直接调用）：
+#   tsc.py、AUDIT-SPEC.md、BOOTSTRAP.md、verify.ps1 / verify.sh、test/、enforcement/ 模板原件
+# 理由：技能已装在 agent 平台上，这些逻辑随时可调；复制进项目纯属冗余。
+#
+# 必须进项目：
+#   AGENTS.md       —— 各平台认"项目根目录自动读"，放技能目录里 AI 不会加载
+#   project.py      —— 本项目自己的门禁命令，跨项目不通用
+#   .source         —— 记录上游位置，供项目内调用
+#   enforcement 落盘件 —— git 钩子 / CI 只能读项目自己的文件，够不着技能目录
+# --------------------------------------------------------------------------- #
+SKILL_ONLY_ENTRIES = [
+    "tsc.py",
+    "AUDIT-SPEC.md",
+    "BOOTSTRAP.md",
+    "verify.ps1",
+    "verify.sh",
+    "test",
+    "project.example.py",
+    ENFORCE_DIR,
+]
 
 
 # --------------------------------------------------------------------------- #
@@ -224,6 +253,21 @@ def detect_legacy(proj_root):
     return [n for n in LEGACY_ENTRIES if (proj_root / n).exists()]
 
 
+def detect_skill_only_leftovers(proj_root):
+    """项目 .agents/ 里残留的执行逻辑（现已统一放技能目录）。只用于提示，不删除。
+
+    扫描目标本身就是上游/技能目录时返回空——那里的逻辑是正本，不是冗余。
+    """
+    proj_root = Path(proj_root)
+    try:
+        if proj_root.resolve() == script_dir().parent.resolve():
+            return []
+    except OSError:
+        pass
+    agents_dir = proj_root / AGENTS_DIR
+    return [n for n in SKILL_ONLY_ENTRIES if (agents_dir / n).exists()]
+
+
 def migrate_legacy(proj_root, dry_run):
     """把根目录的旧布局搬进 .agents/。返回 (已移动, 建议人工处理)。"""
     proj_root = Path(proj_root)
@@ -246,20 +290,16 @@ def migrate_legacy(proj_root, dry_run):
 # 同步主流程
 # --------------------------------------------------------------------------- #
 def collect_payload(upstream):
-    """列出需要分发的文件：键为相对项目根的路径，值为上游源文件。
+    """列出需要分发到项目的文件：键为相对项目根的路径，值为上游源文件。
+
+    **只分发"必须躺在项目里"的文件**（见 SKILL_ONLY_ENTRIES 上方的说明）：
+    版本号一个。执行逻辑（tsc.py / AUDIT-SPEC / BOOTSTRAP / verify.* / test / 执法包模板原件）
+    一律留在技能目录，不往项目里复制。
 
     注意：**不包含根 AGENTS.md**。它需要与项目现有 §2 合成后再写，
     由 do_apply 单独处理；若也放进这里，会被原始上游文件覆盖掉 §2 定制。
     """
     items = [(Path(AGENTS_DIR) / VERSION_FILE, upstream / VERSION_FILE)]
-    agents_dir = upstream / AGENTS_DIR
-    for path in sorted(agents_dir.rglob("*")):
-        if not path.is_file():
-            continue
-        rel = path.relative_to(agents_dir)
-        if rel.as_posix() in {SOURCE_FILE, PROJECT_FILE}:
-            continue  # 项目自有文件，永不由上游覆盖
-        items.append((Path(AGENTS_DIR) / rel, path))
     return items
 
 
@@ -390,7 +430,8 @@ def do_apply(proj_root, upstream, dry_run, force):
         agents_dir = proj_root / AGENTS_DIR
         if not dry_run:
             agents_dir.mkdir(parents=True, exist_ok=True)
-            example = agents_dir / PROJECT_EXAMPLE
+            # 模板从上游取（项目里不再留 project.example.py）
+            example = upstream / AGENTS_DIR / PROJECT_EXAMPLE
             project_py = agents_dir / PROJECT_FILE
             if example.is_file() and not project_py.is_file():
                 shutil.copyfile(str(example), str(project_py))
@@ -444,10 +485,20 @@ def do_apply(proj_root, upstream, dry_run, force):
             "npm i -D @commitlint/cli @commitlint/config-conventional，再执行 "
             "pre-commit install && pre-commit install --hook-type commit-msg"
             "（依赖没装好时钩子会拦死提交，不是自动跳过）；"
-            "② 开分支保护（见 .agents/enforcement/README.md）。")
+            "② 开分支保护（见技能目录 .agents/enforcement/README.md）。")
 
     if not (proj_root / AGENTS_DIR / PROJECT_FILE).is_file() and not dry_run:
         say("下一步：编辑 .agents/project.py，填入本项目自己的门禁命令。")
+
+    # 瘦身提示：项目里若留着旧版复制进来的执行逻辑，只提示、不删除（契约 R-3.4）
+    stale = detect_skill_only_leftovers(proj_root)
+    if stale:
+        say("")
+        say("提示：以下文件是旧版复制进来的执行逻辑，现已统一由技能目录提供，")
+        say("      留在项目里只是冗余（不影响功能）。确认后可自行删除：")
+        for name in stale:
+            say("  .agents/%s" % name)
+        say("      删除属破坏性操作，脚本不会代劳——需要时请人工执行。")
     return EXIT_OK
 
 
@@ -589,6 +640,11 @@ def cmd_status(proj_root, upstream):
     legacy = detect_legacy(proj_root)
     if legacy:
         say("检测到旧结构（跑 sync 会自动搬进 .agents/）：%s" % "、".join(legacy))
+
+    stale = detect_skill_only_leftovers(proj_root)
+    if stale:
+        say("冗余执行逻辑（已由技能目录统一提供，项目里留着不影响功能）：%s" % "、".join(stale))
+        say("  确认后可自行删除；删除属破坏性操作，脚本不会代劳。")
     return EXIT_OK
 
 
