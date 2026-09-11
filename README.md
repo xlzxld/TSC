@@ -134,7 +134,7 @@ BUILD_CMD     = None          # 没有就写 None
 
 ## 五、维护本仓库（发版）
 
-1. 改完内容后同步 `VERSION` 与三处版本头（`AGENTS.md` / `.agents/AUDIT-SPEC.md` / `.agents/BOOTSTRAP.md`）。
+1. 改完内容后同步 `VERSION` 与六处版本头（`AGENTS.md` / `.agents/AUDIT-SPEC.md` / `.agents/BOOTSTRAP.md` / `.agents/enforcement/README.md` / `SKILL.md` 的 `version:` / `使用手册.md` 首部）。
 2. 在仓库里跑一次 `python3 .agents/tsc.py sync --from .`，让 `.agents/VERSION` 跟上（版本号不一致时它会自动补写）。
 3. 在 `CHANGELOG.md` 顶部记一笔。
 4. 校验：`wc -l AGENTS.md` 必须 < 80；`python3 .agents/tsc.py verify` 退出码 0；`check-config` 退出码 0。
