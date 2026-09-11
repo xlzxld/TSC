@@ -20,8 +20,8 @@ FMT_CHECK_CMD = None
 # 静态检查
 LINT_CMD = None
 
-# 测试
-TEST_CMD = None
+# 测试（macOS 上如无 python 命令，此处与 AGENTS.md §2 同步改成 python3）
+TEST_CMD = 'python -m unittest discover -s .agents/test -p "test_*.py"'
 
 # 构建
 BUILD_CMD = None

@@ -31,7 +31,7 @@
 |---|---|---|
 | 技术栈 | Markdown 文档 + Python 3（仅标准库） | — |
 | 构建 (Build) | 无 | — |
-| 测试 (Test) | 无 | 无测试套件，按 §2 尾注降级为手动验证清单 |
+| 测试 (Test) | `python -m unittest discover -s .agents/test -p "test_*.py"` | ✅ 全绿；已知豁免清单内且非本次引入的失败不阻断，但须列出 |
 | 静态检查 (Lint) | 无 | — |
 | 格式化 (Format) | 无 | — |
 | 主干分支 | main | ✅ 禁止未经 Pull Request 直接向主干提交 |
