@@ -21,22 +21,36 @@ visibility: "public"
 - **技能目录**（即本文件所在目录）就是"上游"。下文用 `<SKILL_DIR>` 指代它。
 - **核心脚本**：`<SKILL_DIR>/.agents/tsc.py`，零第三方依赖，Windows 与 macOS 通用。
 
-## 一、命令路由
+## 一、调用方式：用户说一句话，你负责跑
 
-用户说了什么，就执行对应动作。`<目标项目根>` 默认取当前工作目录。
+**用户永远不需要敲命令。** 他要的是"接入契约""同步契约""跑门禁""体检"这类一句话，底层命令由你在 `<SKILL_DIR>` 里代跑。谁敲 python、用 `python` 还是 `python3`、参数怎么拼，全是你的活。
 
-| 用户说 | 执行 |
+一句话入口（自然人话与简短说法等价）：
+
+| 用户可能说 | 你执行 |
 | --- | --- |
-| `tsc`、契约状态 | `python3 "<SKILL_DIR>/.agents/tsc.py" status` |
-| `tsc install`、接入契约 | `python3 "<SKILL_DIR>/.agents/tsc.py" install --from "<SKILL_DIR>" --project "<目标项目根>"` |
-| `tsc sync`、同步契约 | `python3 "<SKILL_DIR>/.agents/tsc.py" sync --from "<SKILL_DIR>" --project "<目标项目根>"` |
-| `tsc verify`、跑门禁 | `python3 "<目标项目根>/.agents/tsc.py" verify` |
-| `tsc check-config` | `python3 "<目标项目根>/.agents/tsc.py" check-config` |
-| 体检 | 读 `<目标项目根>/.agents/AUDIT-SPEC.md`，按其铁律执行（**只读**，输出问题清单后立即停） |
-| 修复 X | 读 `<目标项目根>/.agents/AUDIT-SPEC.md` 定级表 + `AGENTS.md` §3 红线，按"先跑基线 → 最小改动 → 回归 → 门禁 → 原子提交"执行 |
-| 适配 | 读 `<目标项目根>/.agents/BOOTSTRAP.md`，按其模式 A/B/C 执行 |
+| "tsc"、"契约状态"、"现在是什么情况"、"接入了吗" | `python3 "<目标项目根>/.agents/tsc.py" status` |
+| "tsc install"、"给这个项目接入契约"、"上契约" | 先 `install ... --dry-run` 报给用户看 → 确认后去掉 `--dry-run` 再跑 |
+| "tsc sync"、"同步契约"、"契约更新了拉一下" | 先 `sync ... --dry-run` 报给用户看 → 确认后去掉 `--dry-run` 再跑 |
+| "tsc verify"、"跑门禁"、"验证一下" | `python3 "<目标项目根>/.agents/tsc.py" verify` |
+| "check-config"、"看 §2 和 project.py 对不对得上" | `python3 "<目标项目根>/.agents/tsc.py" check-config` |
+| "体检"、"audit" | 读 `<目标项目根>/.agents/AUDIT-SPEC.md`，按其铁律执行（**只读**，输出问题清单后立即停） |
+| "修复 X" | 读 `<目标项目根>/.agents/AUDIT-SPEC.md` 定级表 + `AGENTS.md` §3 红线，按"先跑基线 → 最小改动 → 回归 → 门禁 → 原子提交"执行 |
+| "适配"、"初始化规范" | 读 `<目标项目根>/.agents/BOOTSTRAP.md`，按其模式 A/B/C 执行 |
 
-Windows 下把 `python3` 写成 `python`。用户不想记这个差异时，让他敲 `<目标项目根>/.agents/verify.ps1`（Windows）或 `.agents/verify.sh`（macOS）。
+展开后的底层命令（**仅供你内部执行，不要贴给用户当任务**）：
+
+```bash
+python3 "<SKILL_DIR>/.agents/tsc.py" status  --project "<目标项目根>"
+python3 "<SKILL_DIR>/.agents/tsc.py" install --from "<SKILL_DIR>" --project "<目标项目根>"
+python3 "<SKILL_DIR>/.agents/tsc.py" sync    --from "<SKILL_DIR>" --project "<目标项目根>"
+python3 "<目标项目根>/.agents/tsc.py" verify
+python3 "<目标项目根>/.agents/tsc.py" check-config
+```
+
+`<目标项目根>` 默认取当前工作目录。Windows 下把 `python3` 写成 `python`（或直接用 `.agents/verify.ps1`）；这层差异由你处理，不要推给用户去记。
+
+**汇报时**只给结论与证据（命令 + 退出码），不要给出"请你执行以下命令"的作业。
 
 ## 二、每次动手前先确认三件事
 
@@ -62,4 +76,4 @@ Windows 下把 `python3` 写成 `python`。用户不想记这个差异时，让�
 
 ## 四、首次接入后要提醒用户的一件事
 
-`.agents/project.py` 生成时四条命令都是 `None`。要提醒用户填成本项目真实的命令，否则门禁会全程 skip 而给出"全绿"的假结论。填完让他跑一次 `check-config` 确认 `AGENTS.md` §2 与 `project.py` 一致。
+`.agents/project.py` 生成时四条命令都是 `None`。要提醒用户填成本项目真实的命令，否则门禁会全程 skip 而给出"全绿"的假结论。填完由你代跑一次 `check-config` 确认 `AGENTS.md` §2 与 `project.py` 一致——同样不要让用户自己去敲。

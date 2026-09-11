@@ -39,9 +39,22 @@ git -c http.proxy=http://127.0.0.1:7897 -c https.proxy=http://127.0.0.1:7897 \
 
 更新技能 = 在技能目录里 `git pull`。**没有打包、没有构建步骤。**
 
-## 二、在项目里使用
+## 二、在项目里使用（一句话调用）
 
-在任意项目根目录：
+装好技能后，**你不需要敲任何命令**。在项目里对 AI 说一句话就行：
+
+| 你说 | AI 会做 |
+| --- | --- |
+| "给这个项目接入契约" / `tsc install` | 先 `--dry-run` 给你看将改动什么，你点头后真正写入 |
+| "同步契约" / `tsc sync` | 拉上游最新内容合并，**你的 §2 不会被覆盖** |
+| "跑门禁" / `tsc verify` | 执行聚合门禁并**原样回报命令与退出码** |
+| "契约状态" / `tsc` | 报告接没接入、什么版本、§2 填好没 |
+| "体检" | 全仓只读扫描，输出 P0~P3 问题表后停下等你点单 |
+
+`python` / `python3` 的差异、`--from` 的路径怎么拼，全由 AI 处理，你不用记。
+
+<details>
+<summary>兜底：手敲命令（CI 或 AI 不在场时用）</summary>
 
 ```bash
 python3 .agents/tsc.py status          # 看状态：接没接入、什么版本、§2 填好没
@@ -53,7 +66,8 @@ python3 .agents/tsc.py check-config    # 校验 §2 与 project.py 是否同源
 
 - **Windows** 用 `python`，**macOS** 用 `python3`；不想记差异就敲 `.agents\verify.ps1` 或 `.agents/verify.sh`。
 - 首次执行 `install` / `sync` 建议先加 `--dry-run`，只报告不写盘。
-- 也可以直接对 AI 说 `tsc install` / `tsc sync` / `tsc verify`，由技能代跑。
+
+</details>
 
 ### 接入后的项目结构
 
@@ -81,7 +95,7 @@ TEST_CMD      = f"{PY} -m pytest"
 BUILD_CMD     = None          # 没有就写 None
 ```
 
-填完跑 `check-config` 确认它与 `AGENTS.md` §2 一致。
+填完对 AI 说一句"跑一下 check-config"，或直接手敲 `python3 .agents/tsc.py check-config`。
 
 ## 三、退出码（脚本的唯一判定口径）
 
