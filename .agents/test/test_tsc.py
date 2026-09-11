@@ -14,6 +14,7 @@
 """
 
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -410,7 +411,9 @@ class InstallSyncE2ETests(unittest.TestCase):
         gate = tsc.read_text(self.tmp / ".github" / "workflows" / "gate.yml")
         self.assertIn("branches: [main]", gate)
         self.assertNotIn("branches: [无", gate)
-        self.assertNotIn("[自动填充]", gate)
+        for ln in gate.splitlines():
+            if "branches:" in ln:
+                self.assertNotIn("自动填充", ln)
 
     def test_fresh_install_gate_yml_keeps_default_branch(self):
         # 占位符不得流进 gate.yml 的 branches:
@@ -418,7 +421,12 @@ class InstallSyncE2ETests(unittest.TestCase):
         self.assertEqual(code, 0, out)
         gate = (self.tmp / ".github" / "workflows" / "gate.yml").read_text(encoding="utf-8")
         self.assertIn("branches: [main]", gate)
-        self.assertNotIn("[自动填充]", gate)
+        # 不变量收窄到 branches 值：占位符/坏值不得出现在分支配置里
+        # （gate.yml 内联校验代码合法引用"[自动填充]"哨兵串，不属泄漏）
+        for ln in gate.splitlines():
+            if "branches:" in ln:
+                self.assertNotIn("[自动填充]", ln)
+        self.assertNotIn("branches: [[自动填充]]", gate)
 
     def test_status_flags_unfilled_section2(self):
         # 修复回归：§2 全占位时 status 必须报"未填好"，不得误报"是"
@@ -508,6 +516,60 @@ class VerifyAndCheckConfigTests(unittest.TestCase):
         combined = (proc.stdout + proc.stderr).decode("utf-8", errors="replace")
         self.assertEqual(proc.returncode, 3, combined)
         self.assertIn("假绿", combined)
+
+    def _gate_inline_run(self):
+        return subprocess.run(
+            [sys.executable, "-c", gate_inline_source()],
+            cwd=str(self.tmp), capture_output=True,
+        )
+
+    def _adapted_section2(self, test_cmd):
+        """把全新安装的占位 §2 整表适配为真实取值（测试行用 test_cmd）。"""
+        agents = self.tmp / "AGENTS.md"
+        t = agents.read_text(encoding="utf-8")
+        t = re.sub(r"\| 技术栈 \|[^\n]*\|", "| 技术栈 | Demo | — |", t, count=1)
+        t = re.sub(r"\| 构建 \(Build\) \|[^\n]*\|", "| 构建 (Build) | 无 | ✅ 无构建产物 |", t, count=1)
+        t = re.sub(r"\| 静态检查 \(Lint\) \|[^\n]*\|", "| 静态检查 (Lint) | 无 | ✅ 无 |", t, count=1)
+        t = re.sub(r"\| 格式化 \(Format\) \|[^\n]*\|", "| 格式化 (Format) | 无 | ✅ 无差异 |", t, count=1)
+        t = re.sub(r"\| 主干分支 \|[^\n]*\|", "| 主干分支 | main | ✅ 禁止直推 |", t, count=1)
+        t = re.sub(r"\| 已知豁免清单 \|[^\n]*\|", "| 已知豁免清单 | 无 | 白名单 |", t, count=1)
+        t = re.sub(r"\| 测试 \(Test\) \|[^\n]*\|", "| 测试 (Test) | `%s` | ✅ 全绿 |" % test_cmd, t, count=1)
+        agents.write_text(t, encoding="utf-8")
+        return agents
+
+    def test_gate_inline_flags_config_mismatch(self):
+        # 回归（v3.2.0 P1-02）：§2 与 project.py 不一致时，CI 内联壳必须 rc=1 拦下
+        (self.tmp / ".agents" / "project.py").write_text(
+            'FMT_CHECK_CMD = None\nLINT_CMD = None\nTEST_CMD = "echo from-project-py"\nBUILD_CMD = None\n',
+            encoding="utf-8")
+        self._adapted_section2("echo from-section2")
+        proc = self._gate_inline_run()
+        combined = (proc.stdout + proc.stderr).decode("utf-8", errors="replace")
+        self.assertEqual(proc.returncode, 1, combined)
+        self.assertIn("不一致", combined)
+
+    def test_gate_inline_agrees_with_check_config(self):
+        # 两套壳同判定：同一不一致夹具，本地 check-config 与 CI 内联壳都 rc=1
+        (self.tmp / ".agents" / "project.py").write_text(
+            'FMT_CHECK_CMD = None\nLINT_CMD = None\nTEST_CMD = "echo from-project-py"\nBUILD_CMD = None\n',
+            encoding="utf-8")
+        self._adapted_section2("echo from-section2")
+        code, out = run_script("check-config", "--project", str(self.tmp))
+        self.assertEqual(code, 1, out)
+        proc = self._gate_inline_run()
+        self.assertEqual(proc.returncode, 1)
+
+    def test_gate_inline_consistent_config_runs_gates(self):
+        # 同源且已配置 → 校验通过、命令真实执行、rc=0
+        (self.tmp / ".agents" / "project.py").write_text(
+            'FMT_CHECK_CMD = None\nLINT_CMD = None\nTEST_CMD = "echo gate-ok"\nBUILD_CMD = None\n',
+            encoding="utf-8")
+        self._adapted_section2("echo gate-ok")
+        proc = self._gate_inline_run()
+        combined = (proc.stdout + proc.stderr).decode("utf-8", errors="replace")
+        self.assertEqual(proc.returncode, 0, combined)
+        self.assertIn("同源校验", combined)
+        self.assertIn("gate-ok", combined)
 
     def test_exit_code_passthrough(self):
         # 用辅助脚本规避跨 shell 引号嵌套问题；门禁命令退出码必须原样传递

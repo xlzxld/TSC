@@ -56,6 +56,81 @@ jobs:
           ns = {"__file__": str(cfg.resolve())}
           exec(compile(cfg.read_text(encoding="utf-8"), str(cfg), "exec"), ns)
 
+          # 同源校验：AGENTS.md §2 与 .agents/project.py 必须一致。
+          # 判定逻辑与本地 `tsc.py check-config` 同源（两套执行壳，一个命令源）。
+          ROW_TO_KEY = {"格式化": "FMT_CHECK_CMD", "静态检查": "LINT_CMD", "测试": "TEST_CMD", "构建": "BUILD_CMD"}
+          def split_row(line):
+              text = line.strip()
+              if text.startswith("|"):
+                  text = text[1:]
+              if text.endswith("|"):
+                  text = text[:-1]
+              cells, cur, esc = [], [], False
+              for ch in text:
+                  if esc:
+                      cur.append(ch)
+                      esc = False
+                  elif ch == "\\":
+                      cur.append(ch)
+                      esc = True
+                  elif ch == "|":
+                      cells.append("".join(cur).strip())
+                      cur = []
+                  else:
+                      cur.append(ch)
+              cells.append("".join(cur).strip())
+              return cells
+          def norm(v):
+              if v is None:
+                  return "无"
+              return str(v).strip().strip("`").strip().replace("\\|", "|")
+          agents_path = Path("AGENTS.md")
+          block = None
+          if agents_path.is_file():
+              lines = agents_path.read_text(encoding="utf-8").split("\n")
+              start = None
+              for i, ln in enumerate(lines):
+                  if ln.startswith("## 2."):
+                      start = i
+                      break
+              if start is not None:
+                  end = len(lines)
+                  for j in range(start + 1, len(lines)):
+                      if lines[j].startswith("## "):
+                          end = j
+                          break
+                  block = "\n".join(lines[start:end])
+          if block is None:
+              print("AGENTS.md 缺少 §2，同源校验与门禁无法执行", file=sys.stderr)
+              sys.exit(1)
+          table = {}
+          for line in block.split("\n"):
+              s = line.strip()
+              if not s.startswith("|"):
+                  continue
+              cells = split_row(s)
+              if len(cells) < 2 or (cells and "".join(cells) and set("".join(cells)) <= set("-: ")):
+                  continue
+              for prefix, key in ROW_TO_KEY.items():
+                  if cells[0].startswith(prefix) and key not in table:
+                      table[key] = cells[1]
+          if any("[自动填充]" in v for v in table.values()):
+              # §2 尚未适配（项目还没填）：跳过同源校验，让"零门禁 rc=3"给出更可行动的信号
+              print("§2 仍是 [自动填充] 占位（项目未适配），跳过同源校验")
+          else:
+              mismatch = []
+              for key in ("FMT_CHECK_CMD", "LINT_CMD", "TEST_CMD", "BUILD_CMD"):
+                  expected = norm(ns[key]) if key in ns else "（未定义该变量）"
+                  actual = norm(table.get(key, "（§2 缺该行）"))
+                  print(f"{key:<14} project.py={expected:<40} §2={actual}")
+                  if expected != actual:
+                      mismatch.append(key)
+              if mismatch:
+                  print(f"不一致：{'、'.join(mismatch)} —— AGENTS.md §2 与 .agents/project.py 必须同源",
+                        file=sys.stderr)
+                  sys.exit(1)
+              print("同源校验：AGENTS.md §2 与 .agents/project.py 一致")
+
           steps = [
               ("格式化 (Format)", "FMT_CHECK_CMD"),
               ("静态检查 (Lint)", "LINT_CMD"),
