@@ -171,6 +171,113 @@ class EnforceOwnershipTests(unittest.TestCase):
         self.assertEqual(tsc._enforce_actions(REPO, REPO, AGENTS_SAMPLE), ([], [], []))
 
 
+class LegacyMigrationTests(unittest.TestCase):
+    """回归（v3.1.2 A-01）：旧结构迁移不得误搬项目自己的 test/、enforcement/。"""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="tsc-legacy-"))
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+
+    def test_fresh_install_leaves_unrelated_dirs_alone(self):
+        # 从未部署过契约的项目（根目录无 AGENTS.md），根 test/ 是项目自己的，不许搬
+        (self.tmp / "test").mkdir(parents=True)
+        (self.tmp / "test" / "test_user_own.py").write_text("print('own')\n", encoding="utf-8")
+        code, out = run_script("install", "--from", str(REPO), "--project", str(self.tmp))
+        self.assertEqual(code, 0, out)
+        self.assertTrue((self.tmp / "test" / "test_user_own.py").is_file())
+        self.assertNotIn("迁移", out)
+        self.assertFalse((self.tmp / ".agents" / "test").exists())
+
+    def test_contracted_project_own_test_dir_not_migrated(self):
+        # 已部署过契约的项目，不带契约内容签名的 test/ 同样不许搬
+        code, out = run_script("install", "--from", str(REPO), "--project", str(self.tmp))
+        self.assertEqual(code, 0, out)
+        (self.tmp / "test").mkdir()
+        (self.tmp / "test" / "test01x.py").write_text("print('own')\n", encoding="utf-8")
+        code, out = run_script("install", "--from", str(REPO), "--project", str(self.tmp))
+        self.assertEqual(code, 0, out)
+        self.assertTrue((self.tmp / "test" / "test01x.py").is_file())
+        self.assertNotIn("迁移", out)
+
+    def test_old_layout_with_signatures_migrates(self):
+        # 真·旧结构（v2 布局：根 AGENTS.md + 带契约签名的 test/、enforcement/）照常迁移
+        (self.tmp / "AGENTS.md").write_text(AGENTS_SAMPLE, encoding="utf-8")
+        (self.tmp / "test").mkdir()
+        (self.tmp / "test" / "EVAL-SET.md").write_text("x\n", encoding="utf-8")
+        (self.tmp / "enforcement").mkdir()
+        (self.tmp / "enforcement" / "gate.yml").write_text("x\n", encoding="utf-8")
+        code, out = run_script("install", "--from", str(REPO), "--project", str(self.tmp))
+        self.assertEqual(code, 0, out)
+        self.assertTrue((self.tmp / ".agents" / "test" / "EVAL-SET.md").is_file())
+        self.assertTrue((self.tmp / ".agents" / "enforcement" / "gate.yml").is_file())
+        self.assertFalse((self.tmp / "test").exists())
+        self.assertFalse((self.tmp / "enforcement").exists())
+
+    def test_dry_run_reports_will_move_not_moved(self):
+        # 回归（v3.1.2 A-05/A-06）：dry-run 不得说"已迁移"，全新安装也不得冒出"版本相同"
+        (self.tmp / "AGENTS.md").write_text(AGENTS_SAMPLE, encoding="utf-8")
+        (self.tmp / "test").mkdir()
+        (self.tmp / "test" / "EVAL-SET.md").write_text("x\n", encoding="utf-8")
+        code, out = run_script(
+            "install", "--from", str(REPO), "--project", str(self.tmp), "--dry-run"
+        )
+        self.assertEqual(code, 0, out)
+        self.assertIn("将迁移到", out)
+        self.assertNotIn("已迁移", out)
+        self.assertNotIn("版本相同", out)
+        self.assertIn("未写入任何文件", out)
+        self.assertTrue((self.tmp / "test" / "EVAL-SET.md").is_file())
+
+
+class SourceRecordTests(unittest.TestCase):
+    """回归（v3.1.2 A-02/A-04）：.source 必须始终记录本次实际使用的上游。"""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="tsc-src-"))
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+
+    def _make_old_upstream(self, root):
+        root.mkdir(parents=True)
+        (root / "AGENTS.md").write_text(AGENTS_SAMPLE, encoding="utf-8")
+        (root / "VERSION").write_text("3.0.0\n", encoding="utf-8")
+        agents = root / ".agents"
+        agents.mkdir()
+        (agents / "project.example.py").write_text("TEST_CMD = None\n", encoding="utf-8")
+        return root
+
+    def test_explicit_from_repoints_source(self):
+        # 显式 --from 新上游成功后，.source 必须跟着换；否则下次裸 sync 会静默降级回旧上游
+        old = self._make_old_upstream(self.tmp / "old-skill")
+        proj = self.tmp / "proj"
+        proj.mkdir()
+        code, out = run_script("install", "--from", str(old), "--project", str(proj))
+        self.assertEqual(code, 0, out)
+        self.assertEqual(tsc.read_text(proj / ".agents" / ".source").strip(), str(old))
+        code, out = run_script("sync", "--from", str(REPO), "--project", str(proj))
+        self.assertEqual(code, 0, out)
+        self.assertEqual(tsc.read_text(proj / ".agents" / ".source").strip(), str(REPO))
+        # 换源后裸 sync 不得静默降级：上游=本仓库、版本同、执法包已对齐 → 应早退，
+        # 且 VERSION 保持本仓库版本（修复前会回落到旧上游的 3.0.0）
+        code, out = run_script("sync", "--project", str(proj))
+        self.assertEqual(code, 0, out)
+        self.assertIn("已是最新", out)
+        self.assertEqual(
+            tsc.read_text(proj / ".agents" / "VERSION").strip(),
+            tsc.upstream_version(REPO),
+        )
+
+    def test_empty_source_gets_rewritten(self):
+        # 空的 .source 既不算缺失也不算死路径，旧版永远不会补写——现在必须回填
+        proj = self.tmp / "proj"
+        proj.mkdir()
+        code, out = run_script("install", "--from", str(REPO), "--project", str(proj))
+        self.assertEqual(code, 0, out)
+        (proj / ".agents" / ".source").write_text("", encoding="utf-8")
+        code, out = run_script("sync", "--project", str(proj))
+        self.assertEqual(code, 0, out)
+        self.assertEqual(tsc.read_text(proj / ".agents" / ".source").strip(), str(REPO))
+
+
 class InstallSyncE2ETests(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp(prefix="tsc-e2e-"))
@@ -194,6 +301,44 @@ class InstallSyncE2ETests(unittest.TestCase):
         self.assertIn("branches: [main]", gate)  # 本仓库 §2 主干分支 = main
         version = (self.tmp / ".agents" / "VERSION").read_text(encoding="utf-8").strip()
         self.assertEqual(version, tsc.upstream_version(REPO))
+
+    def test_install_dry_run_previews_all_seven_files(self):
+        # 回归：dry-run 预览必须列全 7 个将写文件（旧版漏报 project.py 与 .source）
+        code, out = run_script("install", "--from", str(REPO), "--project", str(self.tmp), "--dry-run")
+        self.assertEqual(code, 0, out)
+        self.assertIn("未写入任何文件", out)
+        for rel in [
+            "AGENTS.md",
+            ".agents/VERSION",
+            ".agents/project.py",
+            ".agents/.source",
+            ".github/workflows/gate.yml",
+            ".pre-commit-config.yaml",
+            "commitlint.config.js",
+        ]:
+            self.assertIn(rel, out, "dry-run 漏报 %s" % rel)
+        self.assertEqual(list(self.tmp.rglob("*")), [])  # dry-run 零写盘
+
+    def test_dead_source_falls_back_and_gets_repaired(self):
+        # 回归（P2-1）：技能目录搬家（.source 死路径）不得让存量项目 sync/status 直接 rc=3
+        code, _ = run_script("install", "--from", str(REPO), "--project", str(self.tmp))
+        self.assertEqual(code, 0)
+        dead = self.tmp / "vanish"  # 从未存在的路径，模拟技能目录被搬走
+        (self.tmp / ".agents" / ".source").write_text(str(dead) + "\n", encoding="utf-8")
+        code, out = run_script("status", "--project", str(self.tmp))  # 只读命令：回退但不改记录
+        self.assertEqual(code, 0, out)
+        self.assertIn("已失效", out)
+        self.assertIn(str(REPO), out)  # 回退到脚本所在仓库（当前即本仓库）
+        self.assertEqual(tsc.read_text(self.tmp / ".agents" / ".source").strip(), str(dead))
+        code, out = run_script("sync", "--project", str(self.tmp), "--dry-run")
+        self.assertEqual(code, 0, out)
+        self.assertIn(".agents/.source", out)
+        self.assertIn("未写入任何文件", out)
+        code, out = run_script("sync", "--project", str(self.tmp))  # 写入命令：顺手修正死记录
+        self.assertEqual(code, 0, out)
+        self.assertEqual(
+            tsc.read_text(self.tmp / ".agents" / ".source").strip(), str(REPO)
+        )
 
     def test_sync_same_version_is_noop(self):
         code, _ = run_script("install", "--from", str(REPO), "--project", str(self.tmp))
@@ -255,6 +400,62 @@ class InstallSyncE2ETests(unittest.TestCase):
         code, out = run_script("status", "--from", str(REPO), "--project", str(self.tmp))
         self.assertEqual(code, 0, out)
         self.assertIn("否，仍有 [自动填充] 占位", out)
+
+
+class StatusTests(unittest.TestCase):
+    """回归（v3.1.2 A-03）：status 对残缺 AGENTS.md 必须如实报告。"""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="tsc-status-"))
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+
+    def test_status_reports_missing_section2(self):
+        proj = self.tmp / "proj"
+        proj.mkdir()
+        (proj / "AGENTS.md").write_text("# T\n\nno section two here\n", encoding="utf-8")
+        code, out = run_script("status", "--from", str(REPO), "--project", str(proj))
+        self.assertEqual(code, 0, out)
+        self.assertIn("找不到 §2 章节", out)
+        self.assertNotIn("是否填好：是", out)
+
+
+class RobustnessTests(unittest.TestCase):
+    """回归（v3.1.2 A-07~A-10）：异常路径与解析健壮性。"""
+
+    def test_normalize_accepts_drive_root(self):
+        # 回归（A-10）：/c/ 恰好三个字符，也要归一成 C:/
+        if os.name != "nt":
+            self.skipTest("MSYS 路径还原仅 Windows 生效")
+        self.assertEqual(tsc.normalize_path_arg("/c/"), "C:/")
+
+    def test_placeholder_skips_header_without_magic_label(self):
+        # 回归（A-09）：表头首列不叫"项"时，表头行的取值列也不得被占位化
+        sample = AGENTS_SAMPLE.replace(
+            "| 项 | 命令 / 取值 | 验证条件 |", "| 名称 | 值 | 说明 |"
+        )
+        out = tsc.section2_to_placeholder(sample)
+        self.assertIn("| 名称 | 值 | 说明 |", out)
+        self.assertIn("| 测试 (Test) | [自动填充] |", out)
+
+    def test_atomic_write_cleans_tmp_on_failure(self):
+        # 回归（A-08）：os.replace 失败时不得残留 .tsc-tmp，且原异常必须抛出
+        from unittest import mock
+
+        target_dir = Path(tempfile.mkdtemp(prefix="tsc-tmp-"))
+        self.addCleanup(shutil.rmtree, target_dir, True)
+        target = target_dir / "f.txt"
+        with mock.patch("os.replace", side_effect=OSError("disk full")):
+            with self.assertRaises(OSError):
+                tsc.write_text_atomic(target, "x")
+        self.assertEqual(list(target_dir.glob("*.tsc-tmp")), [])
+
+    def test_main_maps_oserror_to_exit_2(self):
+        # 回归（A-07）：底层 IO 异常不得裸 traceback，须归一为退出码 2
+        from unittest import mock
+
+        with mock.patch.object(tsc, "find_upstream", side_effect=OSError("boom")):
+            code = tsc.main(["status"])
+        self.assertEqual(code, 2)
 
 
 class VerifyAndCheckConfigTests(unittest.TestCase):

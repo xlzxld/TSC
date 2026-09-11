@@ -1,5 +1,36 @@
 # 变更记录 (CHANGELOG)
 
+## v3.1.2（2026-09-12）
+
+**依据**：用户委托的交付前终审（全仓逐文件精读 + 沙箱实测复现 6 组缺陷场景），经用户确认后全量修复（A-01~A-13）。均为缺陷修复与勘误，无破坏性变更、无契约条款改动。
+
+| # | 变更 | 文件 | 依据发现 |
+|---|---|---|---|
+| 1 | 旧结构迁移加双重门卫：项目根无 `AGENTS.md`（从未部署过契约）不迁移；`enforcement/`、`test/` 等通用名目录须带契约内容签名（`gate.yml`/`Makefile`、`test_tsc.py`/`EVAL-SET.md` 等）才认——修复全新 install 把项目自有 `test/`、`enforcement/` 搬进 `.agents/` 还建议删除的严重缺陷 | `.agents/tsc.py`、`.agents/test/test_tsc.py` | 沙箱实测：空项目放自有 `test/` → 被搬走并提示"可自行删除"（终审 A-01，严重） |
+| 2 | `.source` 一律回写为本次实际使用的上游（覆盖显式 `--from` 换源、空文件两种漏网场景），删除仅判死路径的 `source_record_dead`——修复"显式 `--from` 新上游成功后裸 `sync` 静默降级回旧版本" | `.agents/tsc.py`、`.agents/test/test_tsc.py` | 沙箱实测：换源升级后裸 `sync`，VERSION 从 3.1.1 回落 3.0.0（终审 A-02 严重 / A-04 中等） |
+| 3 | `status` 对完全没有 §2 章节的 AGENTS.md 如实报"找不到 §2 章节"，不再误报"已填好" | `.agents/tsc.py`、`.agents/test/test_tsc.py` | 沙箱实测（终审 A-03，中等） |
+| 4 | do_apply 汇报措辞：`--dry-run` 不再说"已迁移"（改"将迁移到"）；去掉与实际版本状态不符的"版本相同，但检测到旧结构残留"前缀 | `.agents/tsc.py`、`.agents/test/test_tsc.py` | 沙箱实测（终审 A-05/A-06，轻微） |
+| 5 | 健壮性四则：顶层兜底 OSError → 退出码 2（不再裸 traceback）；原子写失败清理 `.tsc-tmp` 残留；§2 占位化按"首个非分隔行"识别表头（去掉对表头字面"项"的依赖）；MSYS 盘根 `/c/` 三字符路径归一 | `.agents/tsc.py`、`.agents/test/test_tsc.py` | 代码定论 + 单测锁定（终审 A-07~A-10，轻微） |
+| 6 | 文档勘误：发版清单"三处版本头"实为六处（补 `enforcement/README.md`、`SKILL.md` frontmatter、`使用手册.md`）；执法包 README 已知限制补 commitlint 全零 SHA 边缘场景 | `README.md`、`使用手册.md`、`.agents/enforcement/README.md` | 逐文件核对（终审 A-11 + 安全备注） |
+| 7 | 补 `v3.1.1` 扁平 tag（发版提交当时漏打，`git tag --list` 取证只到 v3.1.0）；EVAL-SET 回放表补 v3.1.1 / v3.1.2 待回放行 | git tag、`.agents/test/EVAL-SET.md` | 终审 A-12 / A-13 |
+
+**版本**：v3.1.1 → v3.1.2（缺陷修复与勘误，无破坏性变更；AGENTS.md 契约条款未动，仅版本头随发版更新）。
+**本轮实测**：37 个单测全绿（`python -m unittest discover -s .agents/test -p "test_*.py"` rc=0，新增 11 条回归全部先红后绿）｜`verify` rc=0｜`check-config` rc=0｜`wc -l AGENTS.md` = 77（< 80）｜终审 6 组沙箱场景修复后复测全部符合预期。
+
+## v3.1.1（2026-09-11）
+
+**依据**：v3.1.0 体检报告（P2×1 + P3×6，只读扫描后经用户确认全部修复）+ 外部 AI 复查补充一处（P2-1）。均为缺陷修复与勘误，无破坏性变更、无契约条款改动。
+
+| # | 变更 | 文件 | 依据发现 |
+|---|---|---|---|
+| 1 | `install --dry-run` 预览补全：全新安装曾漏报 `.agents/project.py` 与 `.agents/.source`（报 5 项、实际落盘 7 项），且这两个文件在真实安装汇报里缺 `.agents/` 前缀；新增"dry-run 必须列全 7 项且零写盘"回归测试 | `.agents/tsc.py`、`.agents/test/test_tsc.py` | 沙箱 dry-run 实测：预览 5 项 vs `test_install_lands_seven_files` 落盘 7 项（体检 A-01） |
+| 2 | `.source` 死路径回退：技能目录搬家后存量项目 sync/status 不再 rc=3——校验 `.agents/.source` 记录，失效则回退脚本所在仓库并提示；同版本幂等早退为记录修正让路，install/sync 成功后把 `.source` 修正为实际使用的上游（status 只读不改）；README 已知限制同步补充 | `.agents/tsc.py`、`.agents/test/test_tsc.py`、`README.md` | 外部 AI 复查（P2-1，实测 rc=3） |
+| 3 | 文档勘误：执法包 README"本条第信息"错别字、"门禁随 `.agents/` 自动同步"过期表述（v3 起执行逻辑不进项目）；README 已知限制补"同版本仍会比对执法包与旧结构"例外；使用手册不再硬编码"77 行"；CHANGELOG v3.1.0 实测单测数 23 更正为 24 | `README.md`、`使用手册.md`、`CHANGELOG.md`、`.agents/enforcement/README.md` | 体检 A-02、A-03、A-04、A-06、A-07 |
+| 4 | `.agents/verify.sh` 补可执行位（此前 100644，macOS/Linux 克隆后 `./verify.sh` 会 permission denied） | `.agents/verify.sh` | 体检 A-05（`git ls-files -s` 取证） |
+
+**版本**：v3.1.0 → v3.1.1（缺陷修复与勘误，无破坏性变更；AGENTS.md 契约条款未动，仅版本头随发版更新）。
+**本轮实测**：26 个单测全绿（`python -m unittest discover -s .agents/test -p "test_*.py"` rc=0）｜`verify` rc=0｜`check-config` rc=0｜沙箱 dry-run 预览 7 项且零写盘｜沙箱死路径 status rc=0 回退生效、sync 后 `.source` 修正｜`wc -l AGENTS.md` = 77（< 80）。
+
 ## v3.1.0（2026-09-11）
 
 **依据**：用户需求——评估 v2.1.2 与当前版本优劣后全方位优化，最少 6 轮迭代、每轮自评。评估结论：v3.0.0 在部署体积（10KB vs 97KB）、平台兼容（脱离 make）、命令单源（§2 ↔ project.py 交叉校验）、技能化分发四个维度全面优于 v2.1.2，本轮在其上做缺陷修复与加固，无破坏性变更。
@@ -15,7 +46,7 @@
 
 **版本**：v3.0.0 → v3.1.0（缺陷修复 + 回归套件，无破坏性变更；行为变化两处——新装 §2 占位化、全 skip 假绿警告——均为缺陷纠正方向）。
 **预算**：AGENTS.md 77 行（< 80 行门禁，`wc -l` LF 计）；规则数 21 条不变。
-**本轮实测**：23 个单测全绿（`python -m unittest discover -s .agents/test -p "test_*.py"` rc=0）｜`verify` rc=0（真实执行测试）｜`check-config` rc=0｜`sync --from .` 自举 rc=0 且仅更新 `.agents/VERSION`、`.github/` 未生成｜关键修复均有"修复前失败 / 修复后通过"对照（见变更 2、5、6 各自实测行）。
+**本轮实测**：24 个单测全绿（`python -m unittest discover -s .agents/test -p "test_*.py"` rc=0）｜`verify` rc=0（真实执行测试）｜`check-config` rc=0｜`sync --from .` 自举 rc=0 且仅更新 `.agents/VERSION`、`.github/` 未生成｜关键修复均有"修复前失败 / 修复后通过"对照（见变更 2、5、6 各自实测行）。
 **六轮自评摘要**：①文档矛盾已清（grep 零残留）；②行为级缺陷全部带对照取证，但回归当时只是一次性沙箱——由 ③常驻套件锁死；④跨文档口径统一，平台声明回归诚实；⑤最重要的一处设计缺陷修复（单源分发与项目定制的边界）；⑥自举污染修复后发版流程与文档不变量终于一致。遗留：macOS/Linux 实测、7 个存量项目迁移、EVAL-SET 人类施压回放（沿用 v3.0.0 待办，另见下行）。
 **合入后待办验证**：① EVAL-SET 7 条对抗回放（针对 v3.1.0，回放表已补行）；② macOS / Linux 侧实跑一次 `install` 与 `verify`；③ 7 个存量项目的结构迁移与 §2 重填（新装占位化后存量项目跑 `sync` 不受影响——§2 已有真实取值，走保留路径）。
 

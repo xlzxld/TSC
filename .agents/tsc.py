@@ -116,14 +116,21 @@ def read_text(path):
 
 
 def write_text_atomic(path, text, dry_run=False):
-    """先写临时文件再替换，避免留下半成品。"""
+    """先写临时文件再替换，避免留下半成品；替换失败时清理临时文件并原样抛错。"""
     if dry_run:
         return
     path = Path(path)
     tmp = path.with_name(path.name + ".tsc-tmp")
-    with open(tmp, "w", encoding="utf-8", newline="\n") as fh:
-        fh.write(text)
-    os.replace(tmp, path)
+    try:
+        with open(tmp, "w", encoding="utf-8", newline="\n") as fh:
+            fh.write(text)
+        os.replace(tmp, path)
+    except OSError:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass  # 清理失败不得掩盖原始错误——原始异常在下方原样抛出
+        raise
 
 
 def write_version(path, version, dry_run=False):
@@ -202,7 +209,7 @@ def normalize_path_arg(value):
     text = str(value)
     if (
         os.name == "nt"
-        and len(text) > 3
+        and len(text) >= 3
         and text[0] == "/"
         and text[1].isalpha()
         and text[2] == "/"
@@ -212,15 +219,37 @@ def normalize_path_arg(value):
 
 
 def find_upstream(explicit, proj_root):
-    """按 显式 --from > 项目 .agents/.source > 脚本自身所在仓库 的顺序定位上游。"""
+    """按 显式 --from > 项目 .agents/.source > 脚本自身所在仓库 的顺序定位上游。
+
+    .source 记录的路径失效（技能目录搬家）时回退到脚本所在仓库并提示，
+    存量项目仍可继续 sync/status；install/sync 成功后会顺手修正记录（见 do_apply）。
+    """
     if explicit:
         return Path(normalize_path_arg(explicit)).expanduser().resolve()
     source_file = Path(proj_root) / AGENTS_DIR / SOURCE_FILE
     if source_file.is_file():
         recorded = read_text(source_file).strip()
         if recorded:
-            return Path(recorded).expanduser().resolve()
+            candidate = Path(recorded).expanduser().resolve()
+            if validate_upstream(candidate):
+                # 校验有缺失项 → 记录已失效，回退到脚本所在仓库
+                warn("记录的上游已失效（技能目录可能搬过家）：%s" % candidate)
+                warn("本次回退到脚本所在仓库继续；install/sync 会顺手把 .source 修正为实际使用的上游。")
+                return script_dir().parent
+            return candidate
     return script_dir().parent  # 技能/母版自举：脚本上一级即上游根
+
+
+def source_record_current(proj_root, upstream):
+    """项目 .agents/.source 是否已记录为当前上游。
+
+    缺失、空文件、死路径、指向别的有效上游（显式 --from 换过源）都算"未记录当前"，
+    do_apply 会把它重写为本次实际使用的上游——否则下次裸 sync 会静默回到旧上游。
+    """
+    source_file = Path(proj_root) / AGENTS_DIR / SOURCE_FILE
+    if not source_file.is_file():
+        return False
+    return read_text(source_file).strip() == str(upstream)
 
 
 def validate_upstream(root):
@@ -248,12 +277,33 @@ def local_version(proj_root):
 # --------------------------------------------------------------------------- #
 # 旧结构迁移（只移动，不删除）
 # --------------------------------------------------------------------------- #
-LEGACY_ENTRIES = ["AUDIT-SPEC.md", "BOOTSTRAP.md", "enforcement", "test"]
+# 旧版契约把 AUDIT-SPEC.md / BOOTSTRAP.md / enforcement/ / test/ 散在项目根目录。
+# 其中 enforcement / test 是通用名，项目自己的同名目录绝不能误搬（v3.1.2 修复）：
+#   1) 项目根必须先有 AGENTS.md（确曾部署过契约）才谈得上"旧结构"；
+#   2) 通用名目录必须带契约内容签名（旧版执法包 / 测试材料特有的文件）才认。
+LEGACY_FILE_ENTRIES = ["AUDIT-SPEC.md", "BOOTSTRAP.md"]
+LEGACY_DIR_SIGNATURES = {
+    "enforcement": ("gate.yml", "Makefile"),
+    "test": (
+        "test_tsc.py",
+        "EVAL-SET.md",
+        "TEST-MANUAL.md",
+        "TEST-ANSWERS.md",
+        "ACCEPTANCE.md",
+    ),
+}
 
 
 def detect_legacy(proj_root):
     proj_root = Path(proj_root)
-    return [n for n in LEGACY_ENTRIES if (proj_root / n).exists()]
+    if not (proj_root / AGENTS_MD).is_file():
+        return []  # 从未部署过契约的项目没有"旧结构"可言
+    found = [n for n in LEGACY_FILE_ENTRIES if (proj_root / n).is_file()]
+    for name, signatures in LEGACY_DIR_SIGNATURES.items():
+        subdir = proj_root / name
+        if subdir.is_dir() and any((subdir / s).exists() for s in signatures):
+            found.append(name)
+    return found
 
 
 def detect_skill_only_leftovers(proj_root):
@@ -322,6 +372,7 @@ def section2_to_placeholder(text):
     lines = text.split("\n")
     start, end = span
     out = []
+    header_seen = False
     for i, line in enumerate(lines):
         if start <= i < end:
             stripped = line.strip()
@@ -330,7 +381,11 @@ def section2_to_placeholder(text):
                 if cells and set("".join(cells)) <= set("-: "):
                     out.append(line)  # 表头分隔行
                     continue
-                if len(cells) >= 2 and cells[0] != "项":
+                if not header_seen:
+                    header_seen = True  # 表头行（不假设首列标签字面）
+                    out.append(line)
+                    continue
+                if len(cells) >= 2:
                     cells[1] = PLACEHOLDER
                     out.append("| " + " | ".join(cells) + " |")
                     continue
@@ -483,20 +538,24 @@ def do_apply(proj_root, upstream, dry_run, force):
     local_ver = local_version(proj_root)
     up_ver = upstream_version(upstream)
 
-    # 版本相同 + 没有旧结构残留 + 执法包也不待更新，才是真正的"无事可做"。
+    # 版本相同 + 没有旧结构残留 + 执法包不待更新 + .source 记录未失效，才是"无事可做"。
     legacy_pending = detect_legacy(proj_root)
     enforce_pending = False
     if not force and local_ver and local_ver == up_ver:
         # 版本没变不等于无事可做：上游模板可能演进了（托管落盘件自动更新）、
-        # 或旧版部署的落盘件还在等一次性迁移。
+        # 或旧版部署的落盘件还在等一次性迁移、或 .source 死记录待修正。
         enforce_pending = enforcement_pending(proj_root, upstream, merged)
-        if not enforce_pending and not legacy_pending:
+        if (
+            not enforce_pending
+            and not legacy_pending
+            and source_record_current(proj_root, upstream)
+        ):
             say("已是最新：本项目已是 v%s，无需变动。" % local_ver)
             return EXIT_OK
         if enforce_pending:
             say("版本相同，但执法包有待更新（上游模板演进或待迁移），继续对齐。")
     if legacy_pending:
-        say("版本相同，但检测到旧结构残留，继续执行迁移：%s" % "、".join(legacy_pending))
+        say("检测到旧结构残留，继续执行迁移：%s" % "、".join(legacy_pending))
 
     # 2) 旧结构迁移
     moved, leftover = migrate_legacy(proj_root, dry_run)
@@ -518,18 +577,25 @@ def do_apply(proj_root, upstream, dry_run, force):
             changed.append(rel.as_posix())
 
         agents_dir = proj_root / AGENTS_DIR
-        if not dry_run:
+        # 模板从上游取（项目里不再留 project.example.py）
+        example = upstream / AGENTS_DIR / PROJECT_EXAMPLE
+        project_py = agents_dir / PROJECT_FILE
+        source_file = agents_dir / SOURCE_FILE
+        need_project_py = example.is_file() and not project_py.is_file()
+        # .source 未记录当前上游（缺失 / 空文件 / 死路径 / 显式 --from 换过源）
+        # 都以本次实际使用的上游为准写入/修正，防止下次裸 sync 静默回到旧上游
+        need_source = not source_record_current(proj_root, upstream)
+        # dry-run 也要计入预览（旧版漏报这两个文件，且汇报路径缺 .agents/ 前缀）
+        if need_project_py:
+            changed.append((Path(AGENTS_DIR) / PROJECT_FILE).as_posix())
+        if need_source:
+            changed.append((Path(AGENTS_DIR) / SOURCE_FILE).as_posix())
+        if not dry_run and (need_project_py or need_source):
             agents_dir.mkdir(parents=True, exist_ok=True)
-            # 模板从上游取（项目里不再留 project.example.py）
-            example = upstream / AGENTS_DIR / PROJECT_EXAMPLE
-            project_py = agents_dir / PROJECT_FILE
-            if example.is_file() and not project_py.is_file():
+            if need_project_py:
                 shutil.copyfile(str(example), str(project_py))
-                changed.append(PROJECT_FILE)
-            source_file = agents_dir / SOURCE_FILE
-            if not source_file.is_file():
+            if need_source:
                 write_version(source_file, str(upstream))
-                changed.append(SOURCE_FILE)
         # VERSION 已随 collect_payload 的载荷循环写入，这里不再重复写
 
         # 执法包模板落盘（gate.yml 的分支名跟随 §2；归属由 tsc-managed 标记决定）
@@ -558,7 +624,7 @@ def do_apply(proj_root, upstream, dry_run, force):
         say("无文件需要变动。")
 
     if moved:
-        say("旧结构已迁移到 .agents/：")
+        say("旧结构%s .agents/：" % ("将迁移到" if dry_run else "已迁移到"))
         for src, dst in moved:
             say("  %s → %s" % (src.name, dst.relative_to(proj_root).as_posix()))
     for extra in leftover:
@@ -741,8 +807,13 @@ def cmd_status(proj_root, upstream):
 
     agents_md = proj_root / AGENTS_MD
     if agents_md.is_file():
-        block = section2_text(read_text(agents_md)) or ""
-        say("§2 是否填好：%s" % ("否，仍有 [自动填充] 占位" if "[自动填充]" in block else "是"))
+        block = section2_text(read_text(agents_md))
+        if block is None:
+            say("§2 是否填好：找不到 §2 章节（AGENTS.md 不完整，先人工修复）")
+        elif "[自动填充]" in block:
+            say("§2 是否填好：否，仍有 [自动填充] 占位")
+        else:
+            say("§2 是否填好：是")
 
     project_py = proj_root / AGENTS_DIR / PROJECT_FILE
     say("门禁可跑：%s" % ("是" if project_py.is_file() else "否（缺 .agents/project.py）"))
@@ -777,6 +848,15 @@ def build_parser():
 def main(argv=None):
     _init_stdout()
     args = build_parser().parse_args(argv)
+    try:
+        return _dispatch(args)
+    except OSError as exc:
+        # 顶层兜底：读盘 / 定位上游等未捕获的 IO 异常按契约归一为退出码 2
+        warn("执行失败（IO / 权限 / 文件占用）：%s" % exc)
+        return EXIT_IO
+
+
+def _dispatch(args):
     if args.project:
         proj_root = Path(normalize_path_arg(args.project)).expanduser().resolve()
     else:
