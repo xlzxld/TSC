@@ -195,6 +195,21 @@ class InstallHookContractTests(unittest.TestCase):
         self.assertIn('-eq 1', text)
         self.assertIn("本次不拦截", text)
 
+    def test_hook_prefers_portable_project_copy(self):
+        # 闸2 可移植性：钩子优先调项目内落盘件（相对路径），仓库换机器仍有效
+        import install_hook as ih
+        block = ih.build_block()
+        self.assertIn('.agents/structure_guard.py', block)
+        self.assertIn("tsc-structure-guard", ih.MARKER)
+
+    def test_generated_hook_block_is_valid_shell_text(self):
+        # 标记块可被 strip_existing 完整剥除（幂等装卸的基础）
+        import install_hook as ih
+        base = "#!/bin/sh\n\necho user-own\n"
+        combined = base + ih.build_block()
+        stripped = ih.strip_existing(combined)
+        self.assertEqual(stripped, base)
+
 
 if __name__ == "__main__":
     unittest.main()

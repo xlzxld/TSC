@@ -23,6 +23,10 @@
 对 Python / Go / Rust 这类有极快语法检查的语言，先跑语法检查；
 它只给一句 EOF 报错时，再用本工具定位到具体行列。
 
+分发形态：本文件带 tsc-managed 标记，随 tsc install / sync 与
+structure_guard.py 一起复制到项目 .agents/（结构门禁落盘件，git 钩子与
+CI 使用）；技能目录里的是正本。
+
 用法
 ----
     python bracket_lint.py src/**/*.py
@@ -34,6 +38,7 @@
 退出码：0 全部通过，1 存在不平衡或混入字符，2 用法错误。
 """
 
+# tsc-managed —— 落盘件：随 tsc install / sync 复制到项目 .agents/，由技能托管更新；删除本行即视为项目接管。
 from __future__ import annotations
 
 import argparse
@@ -41,7 +46,7 @@ import json
 import os
 import sys
 
-__version__ = "1.0.0"
+__version__ = "1.1.0"
 
 OPEN = {"(": ")", "[": "]", "{": "}"}
 CLOSE = {v: k for k, v in OPEN.items()}

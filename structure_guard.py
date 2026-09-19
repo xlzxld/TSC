@@ -25,9 +25,18 @@ bracket_lint 解决"括号在哪一行失衡"，但 HYT-CAD 坑 #75 证明：括
 四道闸共用本入口
 ----------------
   闸1 AI 编辑后   agent hook（--from-hook：stdin JSON 取文件路径，有问题退出 2）
-  闸2 git 提交时  install_hook.py 生成的 pre-commit（--staged 或文件表）
-  闸3 CI          全仓扫描（git ls-files 或目录参数）
-  闸4 交付前      AGENTS.md §2 静态检查
+  闸2 git 提交时  install_hook.py 生成的 pre-commit（--staged 或文件表，
+                  调用项目内落盘件 .agents/structure_guard.py，可移植）
+  闸3 CI          全仓扫描（gate.yml 的结构门禁步骤，读项目内落盘件）
+  闸4 交付前      AGENTS.md §2 静态检查行 / tsc verify
+
+分发形态（tsc-managed）
+-----------------------
+  本文件带 tsc-managed 标记，随 tsc install / sync 作为执法包落盘件复制到
+  项目 .agents/structure_guard.py（连同 bracket_lint.py）。技能目录里的是
+  正本；项目里的落盘件供 git 钩子与 CI 使用（它们只认项目自己的文件）。
+  上游正本更新后，落盘件由 tsc-managed 托管机制自动跟进；项目删掉标记行
+  即视为接管，技能不再覆盖。
 
 退出码契约（与 tsc.py 对齐）
 ---------------------------
@@ -35,6 +44,11 @@ bracket_lint 解决"括号在哪一行失衡"，但 HYT-CAD 坑 #75 证明：括
   1  代码结构问题（闸 2/3 据此拦截）
   2  工具自身故障（钩子告警放行，不冒充代码问题；CI 层 fail-closed 兜底）
   3  配置非法（如 --lang 给了不认识的值）
+
+行内豁免（误报逃生口）
+---------------------
+  在问题所在行写注释 guard:skip 豁免该行全部问题；guard:skip=code1,code2
+  只豁免指定问题码。豁免会在输出中计数显示，不静默吞掉。
 
 用法
 ----
@@ -51,8 +65,10 @@ bracket_lint 解决"括号在哪一行失衡"，但 HYT-CAD 坑 #75 证明：括
   - 闸1（--from-hook）fail-open：stdin 解析失败、工具故障一律放行（闸2/3 兜底）；
     只有确凿的结构问题才退出 2 拦截，防止钩子自身变成事故源。
   - 子进程判定统一为"退出码非 0 或 stderr 非空"双条件，不赌单一信号。
+  - 超大文件（>2MB）只跑 L0/L1：深层解析对巨型生成物的耗时与误报都不划算。
 """
 
+# tsc-managed —— 落盘件：随 tsc install / sync 复制到项目 .agents/，由技能托管更新；删除本行即视为项目接管。
 from __future__ import annotations
 
 import argparse
@@ -64,7 +80,7 @@ import shutil
 import subprocess
 import sys
 
-__version__ = "1.1.0"
+__version__ = "1.2.0"
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 if HERE not in sys.path:
@@ -75,6 +91,7 @@ import bracket_lint  # noqa: E402  （与本脚本同目录，作为 L1 引擎�
 MAX_FILES = 1000          # 一次扫描的文件数上限，超出截断并告警
 MAX_HOOK_FILES = 20       # 闸1 单次最多检查的文件数
 MAX_MSG = 200             # 单条消息最长字符
+BIG_FILE = 2 * 1024 * 1024  # 超过此字节数只跑 L0/L1（深层解析对巨型生成物不划算）
 
 # 这些扩展名是文档/数据，不做结构检查（中文散文里的全角标点是合法内容）
 DOC_EXTS = {".md", ".txt", ".rst", ".adoc", ".log", ".csv", ".ini", ".cfg"}
@@ -287,7 +304,7 @@ def _mk_issue(layer, line, col, code, msg):
             "code": code, "msg": (msg or "").strip()[:MAX_MSG]}
 
 
-def check_python(path, src, real_file=True):
+def check_python(path, src):
     try:
         ast.parse(src, filename=path)
         return None, None, None
@@ -301,7 +318,7 @@ def check_python(path, src, real_file=True):
         return None, "Python ast 解析异常: %r" % (e,), None
 
 
-def check_json(path, src, real_file=True):
+def check_json(path, src):
     try:
         json.loads(src)
         return None, None, None
@@ -309,11 +326,11 @@ def check_json(path, src, real_file=True):
         line = src.count("\n", 0, e.pos) + 1
         col = e.pos - (src.rfind("\n", 0, e.pos) + 1) + 1
         return _mk_issue("L2", line, col, "json-error", e.msg), None, None
-    except (RecursionError, Exception) as e:
+    except Exception as e:
         return None, "JSON 解析异常: %r" % (e,), None
 
 
-def check_toml(path, src, real_file=True):
+def check_toml(path, src):
     try:
         import tomllib
     except ImportError:
@@ -327,6 +344,24 @@ def check_toml(path, src, real_file=True):
         return None, "TOML 解析异常: %r" % (e,), None
 
 
+def check_yaml(path, src):
+    try:
+        import yaml  # PyYAML 非标准库，缺席时降级为平衡检查
+    except ImportError:
+        return None, None, "无 PyYAML，.yaml 仅做平衡检查"
+    try:
+        yaml.safe_load(src)
+        return None, None, None
+    except yaml.YAMLError as e:
+        mark = getattr(e, "problem_mark", None)
+        line = mark.line + 1 if mark else 1
+        col = mark.column + 1 if mark else 1
+        return _mk_issue("L2", line, col, "yaml-error",
+                         str(getattr(e, "problem", None) or e)), None, None
+    except Exception as e:
+        return None, "YAML 解析异常: %r" % (e,), None
+
+
 def _subprocess_check(path, cmd, parse_stderr, toolname):
     """通用外部命令检查：failed = 退出码非 0 或 stderr 非空（双条件，不赌单一信号）。"""
     rc, out, err, terr = _run_cmd(cmd)
@@ -338,7 +373,7 @@ def _subprocess_check(path, cmd, parse_stderr, toolname):
     return _mk_issue("L2", line, col, "syntax-error", "%s: %s" % (toolname, msg)), None, None
 
 
-def check_node(path, src, real_file=True):
+def check_node(path, src):
     node = shutil.which("node")
     if not node:
         return None, None, "node 不可用，JS 仅做平衡检查"
@@ -352,7 +387,7 @@ def check_node(path, src, real_file=True):
     return _subprocess_check(path, [node, "--check", path], parse, "node --check")
 
 
-def check_bash(path, src, real_file=True):
+def check_bash(path, src):
     bash = shutil.which("bash")
     if not bash:
         return None, None, "bash 不可用，shell 仅做平衡检查"
@@ -362,10 +397,22 @@ def check_bash(path, src, real_file=True):
         m = re.search(r"line (\d+)", first)
         return (int(m.group(1)) if m else 1), 1, first[:MAX_MSG]
 
-    return _subprocess_check(path, [bash, "-n", path], parse, "bash -n")
+    issue, terr, deg = _subprocess_check(path, [bash, "-n", path], parse, "bash -n")
+    # shellcheck（有则增强）：bash -n 只查语法，error 级的语义结构错误靠它补
+    sc = shutil.which("shellcheck")
+    if sc is not None:
+        rc, out, err, terr2 = _run_cmd([sc, "-S", "error", "-f", "gcc", path])
+        if terr2 is None and rc != 0:
+            first = next((l for l in out.splitlines() if l.strip()), "")
+            m = re.search(r":(\d+):(\d+):\s*(.*)$", first)
+            sc_issue = _mk_issue("L2", int(m.group(1)) if m else 1,
+                                 int(m.group(2)) if m else 1, "syntax-error",
+                                 "shellcheck: %s" % (m.group(3) if m else first[:MAX_MSG]))
+            return sc_issue, terr, deg
+    return issue, terr, deg
 
 
-def check_ruby(path, src, real_file=True):
+def check_ruby(path, src):
     ruby = shutil.which("ruby")
     if not ruby:
         return None, None, "ruby 不可用，仅做平衡检查"
@@ -378,7 +425,7 @@ def check_ruby(path, src, real_file=True):
     return _subprocess_check(path, [ruby, "-c", path], parse, "ruby -c")
 
 
-def check_gofmt(path, src, real_file=True):
+def check_gofmt(path, src):
     gofmt = shutil.which("gofmt")
     if not gofmt:
         return None, None, "gofmt 不可用，Go 仅做平衡检查"
@@ -404,7 +451,7 @@ _PS_SCRIPT = (
 )
 
 
-def check_powershell(path, src, real_file=True):
+def check_powershell(path, src):
     exe = shutil.which("pwsh") or shutil.which("powershell")
     if not exe:
         return None, None, "PowerShell 不可用，.ps1 仅做平衡检查"
@@ -432,6 +479,7 @@ L2_BY_EXT = {
     ".pyw": check_python, ".pyi": check_python,
     ".json": check_json,
     ".toml": check_toml,
+    ".yaml": check_yaml, ".yml": check_yaml,
     ".js": check_node, ".mjs": check_node, ".cjs": check_node,
     ".sh": check_bash, ".bash": check_bash, ".zsh": check_bash,
     ".rb": check_ruby,
@@ -453,10 +501,32 @@ def detect_lang(label, src):
     return bracket_lint.detect_lang(label, src)
 
 
+def _exempt_filter(src, issues):
+    """行内豁免：问题行文本含 guard:skip（或 guard:skip=code1,code2）则丢弃该问题。
+
+    返回 (保留的问题, 豁免计数)。只按"该行原文含标记"判定——标记写进字符串
+    字面量也会生效，但那是用户主动写下的行为，不猜意图。
+    """
+    lines = src.split("\n")
+    kept, dropped = [], 0
+    for iss in issues:
+        ln = iss.get("line")
+        text = lines[ln - 1] if isinstance(ln, int) and 1 <= ln <= len(lines) else ""
+        m = re.search(r"guard:skip(?:=(\S+))?", text)
+        if m:
+            codes = set(m.group(1).split(",")) if m.group(1) else None
+            if codes is None or iss.get("code") in codes:
+                dropped += 1
+                continue
+        kept.append(iss)
+    return kept, dropped
+
+
 def check_source(label, src, lang=None, max_issues=5, real_file=True):
     """对一段源码跑 L0~L3。real_file=False 时跳过需真实文件的外部命令（自检用）。"""
     res = {"path": label, "lang": None, "ok": True, "skipped": None,
-           "issues": [], "degraded": [], "tool_error": None, "suggestion": ""}
+           "issues": [], "degraded": [], "tool_error": None, "suggestion": "",
+           "exempted": 0}
 
     if lang is None:
         ext = os.path.splitext(label)[1].lower()
@@ -465,6 +535,10 @@ def check_source(label, src, lang=None, max_issues=5, real_file=True):
             return res
         lang = detect_lang(label, src)
     res["lang"] = lang
+
+    big = len(src.encode("utf-8", "replace")) > BIG_FILE
+    if big:
+        res["degraded"].append("超大文件(>2MB)，仅做 L0/L1 平衡检查")
 
     prof = bracket_lint.PROFILES.get(lang) or EXTRA_PROFILES.get(lang)
     if prof is None:
@@ -493,7 +567,7 @@ def check_source(label, src, lang=None, max_issues=5, real_file=True):
     # L2 结构层
     ext = os.path.splitext(label)[1].lower()
     checker = L2_BY_EXT.get(ext)
-    if checker:
+    if checker and not big:
         if not real_file and getattr(checker, "needs_real_file", False):
             res["degraded"].append("自检模式：跳过外部命令深检")
         else:
@@ -509,7 +583,7 @@ def check_source(label, src, lang=None, max_issues=5, real_file=True):
                 res["degraded"].append(deg)
 
     # L3 形态层
-    if lang in EXTRA_PROFILES:
+    if lang in EXTRA_PROFILES and not big:
         try:
             for layer, ln, cl, code, msg in check_lisp_forms(src):
                 res["issues"].append({"layer": layer, "line": ln, "col": cl,
@@ -517,6 +591,9 @@ def check_source(label, src, lang=None, max_issues=5, real_file=True):
         except Exception as e:
             if not res["tool_error"]:
                 res["tool_error"] = "L3 形态检查异常: %r" % (e,)
+
+    # 行内豁免（guard:skip）：最后统一过滤，只作用于 L1~L3 的机械发现
+    res["issues"], res["exempted"] = _exempt_filter(src, res["issues"])
 
     res["issues"] = res["issues"][:50]
     res["ok"] = not res["issues"]
@@ -617,6 +694,9 @@ def render(res, lines=None):
         out.append(_c("33", "     建议：在文件末尾按顺序补上  %s" % res["suggestion"]))
     for d in res["degraded"]:
         out.append(_c("90", "     降级：%s" % d))
+    if res.get("exempted"):
+        out.append(_c("90", "     已按 guard:skip 豁免 %d 处（标记见对应行）"
+                      % res["exempted"]))
     if res["tool_error"]:
         out.append(_c("33", "     工具故障：%s" % res["tool_error"]))
     return "\n".join(out)
@@ -726,7 +806,7 @@ def hook_main():
         if terr:
             results.append({"path": p, "lang": None, "ok": True, "skipped": None,
                             "issues": [], "degraded": [], "tool_error": terr,
-                            "suggestion": ""})
+                            "suggestion": "", "exempted": 0})
             continue
         if skip:
             continue
@@ -778,9 +858,17 @@ _SELFTEST = [
     ("lisp 引用表不误报", "x.lsp", "(defun f ()\n  (setq pts '((1 2) (3 4)))\n  (length pts))\n", True),
     ("lisp 字符串含括号（合法）", "x.lsp", '(princ "(hello)")\n', True),
     ("md 文档跳过", "x.md", "# 标题（全角括号合法）\n", True),
+    ("豁免：同行 guard:skip", "x.py", "x = (1  # guard:skip\n", True),
+    ("豁免：指定问题码命中", "x.lsp",
+     "(defun f ()\n  (setq y x 2)  ; guard:skip=setq-odd-args\n  (list y))\n", True),
+    ("豁免：指定问题码不命中仍报", "x.py", "x = (1  # guard:skip=fullwidth\n", False),
+    ("yaml 断裂(L1 兜底+深检)", "x.yaml", "a: [1, 2\nb: 3\n", False),
+    ("超大文件只跑 L1", "big.py", "# " + "a" * (2 * 1024 * 1024) + "\nx = (1\n", False),
 ]
 
 # 伪路径下 L1 的 plain profile 未闭合串不报警——md 用例依赖 skipped 分支，不受影响
+# 超大文件用例同时验证"跳过 L2"：x = (1 是语法错误，但大文件模式不跑 ast，
+# 只报 L1 的 unclosed——期望仍为不通过，但 issue 全部来自 L1。
 
 
 def selftest() -> int:
@@ -883,12 +971,12 @@ def main(argv=None) -> int:
         if terr:
             results.append({"path": p, "lang": None, "ok": True, "skipped": None,
                             "issues": [], "degraded": [], "tool_error": terr,
-                            "suggestion": ""})
+                            "suggestion": "", "exempted": 0})
             continue
         if skip:
             results.append({"path": p, "lang": None, "ok": True, "skipped": skip,
                             "issues": [], "degraded": [], "tool_error": None,
-                            "suggestion": ""})
+                            "suggestion": "", "exempted": 0})
             continue
         res = check_source(p, src, lang=args.lang, max_issues=args.max)
         results.append(res)

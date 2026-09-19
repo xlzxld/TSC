@@ -6,14 +6,20 @@
       权威语法/调用形态/项目断言），结构有问题就阻止提交——
       坏代码进不了仓库，而不是等 CI 或运行时才发现。
 
+检查器取用顺序（可移植优先）：
+  1. 项目内落盘件 <repo>/.agents/structure_guard.py（tsc install/sync 部署，
+     相对路径，仓库搬到任何机器都有效）——推荐路径；
+  2. 回退：本安装器同目录的 structure_guard.py 正本（技能目录绝对路径，
+     只在本机有效；项目未接契约或母版自举时使用）。
+
 安全约束（刻意收窄）：
   - 只写目标仓库的 .git/hooks/pre-commit，不碰任何源码文件
   - 已存在同名钩子默认拒绝覆盖，除非显式 --force（覆盖前自动备份为 pre-commit.bak）
   - 不修改 git 全局配置，不写 ~/.gitconfig
 
 退出码语义（与 structure_guard 契约一致）：
-  退出码 1 = 代码结构问题 → 拦截提交
-  退出码 2/3 = 门禁自身故障 → 告警放行（不冒充代码问题），CI 层兜底
+  0  安装/卸载成功
+  2  找不到仓库 / 已有钩子未获授权 / 找不到检查器
 
 用法：
     python install_hook.py --repo /path/to/repo
@@ -29,25 +35,38 @@ import shutil
 import stat
 import sys
 
+__version__ = "1.1.0"
+
 HOOK_NAME = "pre-commit"
-MARKER = "# >>> bracket-balance-guard >>>"
-END_MARKER = "# <<< bracket-balance-guard <<<"
+MARKER = "# >>> tsc-structure-guard >>>"
+END_MARKER = "# <<< tsc-structure-guard <<<"
 
 HOOK_BODY = """{marker}
-# 提交前检查暂存文件的结构完整性（括号平衡/语法/缩进/形态）。由 bracket-balance-guard 技能安装。
+# 提交前检查暂存文件的结构完整性（括号平衡/语法/缩进/形态）。由 tsc 技能安装。
 # 卸载：删除本标记块，或运行 install_hook.py --uninstall
 _bg_files=$(git diff --cached --name-only --diff-filter=ACM)
 if [ -n "$_bg_files" ]; then
-  {python} {script} --quiet --staged --color never
-  _bg_rc=$?
-  if [ "$_bg_rc" -eq 1 ]; then
-    echo ""
-    echo "  >> 结构门禁未通过，已阻止本次提交。按上面给的行列修好，再 git add。"
-    echo "  >> 确认要跳过：git commit --no-verify"
-    exit 1
-  elif [ "$_bg_rc" -ne 0 ]; then
-    echo ""
-    echo "  >> 结构门禁自身异常(退出码 $_bg_rc)，本次不拦截，请尽快排查（CI 会兜底）。"
+  if [ -f .agents/structure_guard.py ]; then
+    _bg_guard=.agents/structure_guard.py
+  else
+    _bg_guard="{fallback}"
+    echo "  >> 注意：项目内没有 .agents/structure_guard.py 落盘件，回退技能目录正本（换机器需重装钩子）。"
+  fi
+  _bg_py=$(command -v python || command -v python3)
+  if [ -z "$_bg_py" ]; then
+    echo "  >> 结构门禁：找不到 python，本次不拦截（CI 会兜底）。"
+  else
+    "$_bg_py" "$_bg_guard" --quiet --staged --color never
+    _bg_rc=$?
+    if [ "$_bg_rc" -eq 1 ]; then
+      echo ""
+      echo "  >> 结构门禁未通过，已阻止本次提交。按上面给的行列修好，再 git add。"
+      echo "  >> 确认要跳过：git commit --no-verify"
+      exit 1
+    elif [ "$_bg_rc" -ne 0 ]; then
+      echo ""
+      echo "  >> 结构门禁自身异常(退出码 $_bg_rc)，本次不拦截，请尽快排查（CI 会兜底）。"
+    fi
   fi
 fi
 {end_marker}
@@ -74,11 +93,9 @@ def find_git_dir(repo: str) -> str | None:
 
 def build_block() -> str:
     here = os.path.dirname(os.path.abspath(__file__))
-    script = os.path.join(here, "structure_guard.py")
-    script = script.replace("\\", "/")
-    prev = os.path.join(here, "precommit_prev.tmp").replace("\\", "/")
-    py = sys.executable.replace("\\", "/")
-    return HOOK_BODY.format(marker=MARKER, end_marker=END_MARKER, python=py, script=script)
+    # 回退正本：项目未落盘 .agents/structure_guard.py 时用技能目录绝对路径
+    fallback = os.path.join(here, "structure_guard.py").replace("\\", "/")
+    return HOOK_BODY.format(marker=MARKER, end_marker=END_MARKER, fallback=fallback)
 
 
 def strip_existing(text: str) -> str:
