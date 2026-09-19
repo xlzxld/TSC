@@ -6,6 +6,9 @@
 tsc/                          ← 仓库根 = 技能根（执行逻辑都在这儿）
 ├─ SKILL.md                   # 技能定义（name: tsc）
 ├─ AGENTS.md                  # 契约母版（分发到项目根）
+├─ structure_guard.py         # 结构门禁统一入口（正本；随 install 落盘进项目）
+├─ bracket_lint.py            # 结构门禁 L1 引擎（正本；随 install 落盘进项目）
+├─ install_hook.py            # 闸2 安装器：给项目装 pre-commit 结构门禁
 ├─ VERSION                    # 版本号单源
 ├─ CHANGELOG.md               # 变更记录
 ├─ 使用手册.md                # 给人看的说明书
@@ -15,11 +18,12 @@ tsc/                          ← 仓库根 = 技能根（执行逻辑都在这�
    ├─ verify.ps1  verify.sh   # 系统入口薄壳
    ├─ AUDIT-SPEC.md           # 体检细则
    ├─ BOOTSTRAP.md            # 适配流程
+   ├─ AI代码结构完整性防护方案.md  # 结构门禁设计文档（历史依据）
    ├─ enforcement/            # 机械执法层模板（落盘件随 install 部署）
    └─ test/                   # 契约自身的题库
 ```
 
-**注意分工**：上面这些**只有 `AGENTS.md` 和执法包落盘件会进项目**。`tsc.py`、`AUDIT-SPEC.md`、`BOOTSTRAP.md`、`verify.*`、`test/`、`enforcement/` 模板原件都常驻技能目录——技能既然已经装在平台上，没必要再往每个项目复制一份。
+**注意分工**：上面这些**只有 `AGENTS.md`、执法包三份落盘件与结构门禁两份落盘件会进项目**（共 9 个文件）。`tsc.py`、`install_hook.py`、`AUDIT-SPEC.md`、`BOOTSTRAP.md`、`verify.*`、`test/`、`enforcement/` 模板原件都常驻技能目录——技能既然已经装在平台上，没必要再往每个项目复制一份。
 
 ## 一、安装技能
 
@@ -39,7 +43,7 @@ git -c http.proxy=http://127.0.0.1:7897 -c https.proxy=http://127.0.0.1:7897 \
 # 离线：直接把仓库目录整个拷进技能目录即可
 ```
 
-更新技能 = 在技能目录里 `git pull`。**没有打包、没有构建步骤。**
+更新技能 = 在技能目录里 `git pull`（同样带上面的代理参数）。**没有打包、没有构建步骤。** 更新后在任何接了契约的项目里对 AI 说一句"**更新契约**"，它会先 pull 技能目录、再把新内容 sync 进项目。
 
 ## 二、在项目里使用（一句话调用）
 
@@ -47,10 +51,13 @@ git -c http.proxy=http://127.0.0.1:7897 -c https.proxy=http://127.0.0.1:7897 \
 
 | 你说 | AI 会做 |
 | --- | --- |
-| **"接入契约"** | 先 `--dry-run` 给你看将改动什么，你点头后真正写入（含执法包） |
-| **"同步契约"** | 拉上游最新内容合并，**你的 §2 不会被覆盖** |
+| **"接入契约"** | 先 `--dry-run` 给你看将改动什么，你点头后真正写入（含执法包与结构门禁落盘件） |
+| **"更新契约"** | 先在技能目录 `git pull` 拉远程最新版，再走"同步契约"流程 |
+| **"同步契约"** | 拉本地技能目录的最新内容合并，**你的 §2 不会被覆盖** |
 | **"体检"** | 全仓只读扫描，输出 P0~P3 问题表后停下等你点单 |
 | **"修复 A-01"** | 按表修，改完自动跑门禁，带证据汇报 |
+| **"结构体检"** | 对指定文件/目录跑结构完整性检查（只读） |
+| **"装结构门禁"** | 给项目装 pre-commit 钩子 + 接 AI 编辑后自动检查 |
 | **"契约状态"** / `tsc` | 报告接没接入、什么版本、§2 填好没 |
 
 **跑门禁不需要你说**。AI 每次改完文件会自动跑 `verify`，提交前必须退出码 0 才算完成（这就是 R-0.1 的落地方式）。`python` / `python3` 的差异、路径怎么拼，也全是 AI 的事。
@@ -84,11 +91,13 @@ python3 "$SK/.agents/tsc.py" check-config --project <项目根>   # 校验 §2 �
 ├─ .github/workflows/gate.yml      # ← 执法包自动落盘（CI 只能读项目自己的文件）
 └─ .agents/
    ├─ project.py                   # 本项目自己的门禁命令
+   ├─ structure_guard.py           # ← 结构门禁落盘件（闸2 钩子与闸3 CI 读它）
+   ├─ bracket_lint.py              # ← 结构门禁 L1 引擎落盘件
    ├─ VERSION                      # 版本号，供 sync 比对
    └─ .source                      # 记录上游在哪
 ```
 
-**整个项目只多 7 个文件，约 10KB。** 执行逻辑（`tsc.py` 等）不再进项目——它们在技能目录里，AI 直接调用即可。
+**整个项目只多 9 个文件，约 50KB。** 执行逻辑（`tsc.py`、`install_hook.py` 等）不再进项目——它们在技能目录里，AI 直接调用即可。
 
 > 首次铺设时若发现项目里还留着旧版复制进来的执行逻辑，脚本会**列出来提示**，但**不会自动删**（契约 R-3.4）。确认后你自己删掉即可，留着也不影响功能。
 
@@ -118,15 +127,17 @@ BUILD_CMD     = None          # 没有就写 None
 
 ## 四、机械执法层（默认安装）
 
-`.agents/enforcement/` 里的模板由 `install` **自动落到生效位置**，不用手工拷贝（模板原件留在技能目录，只落生效件）：
+`.agents/enforcement/` 里的模板与结构门禁脚本由 `install` **自动落到生效位置**，不用手工拷贝（模板原件留在技能目录，只落生效件）：
 
 | 模板 | 自动落到 | 作用 |
-| --- | --- | --- |
-| `gate.yml` | 项目的 `.github/workflows/gate.yml` | PR / 主干 push 上的 CI 门禁；`branches:` 按 §2「主干分支」自动填 |
+|---|---|---|
+| `gate.yml` | 项目的 `.github/workflows/gate.yml` | PR / 主干 push 上的 CI 门禁（含结构门禁步骤）；`branches:` 按 §2「主干分支」自动填 |
 | `.pre-commit-config.yaml` | 项目根（同名） | 本地 gitleaks 密钥扫描 + commitlint |
 | `commitlint.config.js` | 项目根 | Conventional Commits 规则 |
+| `structure_guard.py` | 项目的 `.agents/structure_guard.py` | 结构门禁：AI 代码结构完整性五层检查（git 钩子与 CI 够不着技能目录，必须落盘进项目） |
+| `bracket_lint.py` | 项目的 `.agents/bracket_lint.py` | 结构门禁的 L1 引擎（同上） |
 
-三份落盘件都带 `tsc-managed` 标记行，按标记决定归属：**带标记 = 技能托管**，`install` / `sync` 时随上游模板自动覆盖更新；**不带标记且内容与模板不同 = 项目已接管**，技能永不覆盖只提示（想换最新模板就自行备份后删掉该文件重跑 `install`）。
+五份落盘件都带 `tsc-managed` 标记行，按标记决定归属：**带标记 = 技能托管**，`install` / `sync` 时随上游模板自动覆盖更新；**不带标记且内容与模板不同 = 项目已接管**，技能永不覆盖只提示（想换最新模板就自行备份后删掉该文件重跑 `install`）。
 
 落盘后还剩两件人工的事：① 先 `pip install pre-commit` + `npm i -D @commitlint/cli @commitlint/config-conventional`，再跑 `pre-commit install && pre-commit install --hook-type commit-msg` 激活本地钩子；② 在 GitHub 开分支保护。细节见技能目录里的 `.agents/enforcement/README.md`。
 
@@ -143,7 +154,7 @@ BUILD_CMD     = None          # 没有就写 None
 
 ## 六、已知限制
 
-- 上游来源只支持**本地路径**，不支持 git URL 直连（避免代理与网络依赖；技能目录本身就是上游）。项目 `.agents/.source` 记录的路径失效时（技能目录搬家）自动回退到脚本所在仓库，`install` / `sync` 成功后顺手把记录修正为实际使用的上游。
-- `sync` 以 `VERSION` 判断契约是否需要更新：版本号相同即跳过（例外：执法包托管件随上游模板演进仍会比对更新，旧结构残留仍会迁移），契约正文本身不做内容级比对。
-- **项目不再自包含**：项目里没有执行逻辑，门禁靠技能目录里的 `tsc.py` 跑。换机器时先装技能，否则项目的门禁跑不了（本地钩子与 CI 落盘件不受影响，CI 门禁照常跑）。
+- 上游来源只支持**本地路径**，不支持 git URL 直连（避免代理与网络依赖；技能目录本身就是上游，远程更新走"技能目录 git pull + 项目 sync"两步，技能触发词"更新契约"已把两步串起来）。项目 `.agents/.source` 记录的路径失效时（技能目录搬家）自动回退到脚本所在仓库，`install` / `sync` 成功后顺手把记录修正为实际使用的上游。
+- `sync` 的同步判据是**逐项内容漂移比对**（v3.2.0 起），不是版本号：上游改了内容但忘 bump 版本，sync 照样把差异写下去。
+- **项目不再自包含**：项目里没有执行逻辑，门禁靠技能目录里的 `tsc.py` 跑（结构门禁落盘件除外——它是钩子与 CI 的生效件，自身可独立运行）。换机器时先装技能，否则项目的门禁跑不了（本地钩子与 CI 落盘件不受影响，CI 门禁照常跑）。
 - 平台：Windows 已实测；macOS / Linux 仅用标准库、无平台专属调用，尚未实测（发版待办已登记）。

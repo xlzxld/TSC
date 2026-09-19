@@ -6,17 +6,19 @@
 
 ## 文件去向（`install` 自动完成）
 
-| 模板（本目录） | 自动落到目标项目 | 作用 |
+| 模板（技能目录） | 自动落到目标项目 | 作用 |
 |---|---|---|
-| `gate.yml` | `.github/workflows/gate.yml` | PR / 主干 push 上的 CI 门禁；`branches:` 按 §2「主干分支」自动填 |
-| `.pre-commit-config.yaml` | 项目根（同名） | 本地 git 钩子：密钥扫描 + 提交信息规范 |
-| `commitlint.config.js` | 项目根 | Conventional Commits 规则 |
+| `.agents/enforcement/gate.yml` | `.github/workflows/gate.yml` | PR / 主干 push 上的 CI 门禁（含结构门禁步骤）；`branches:` 按 §2「主干分支」自动填 |
+| `.agents/enforcement/.pre-commit-config.yaml` | 项目根（同名） | 本地 git 钩子：密钥扫描 + 提交信息规范 |
+| `.agents/enforcement/commitlint.config.js` | 项目根 | Conventional Commits 规则 |
+| 根目录 `structure_guard.py` | `.agents/structure_guard.py` | 结构门禁落盘件：AI 代码结构完整性五层检查（括号/语法/缩进/形态） |
+| 根目录 `bracket_lint.py` | `.agents/bracket_lint.py` | 结构门禁的 L1 引擎（语言感知括号栈） |
 
-**门禁本体不在这里**——由技能目录里的 `.agents/tsc.py verify` 承担（执行逻辑不进项目，由 AI 直接调用）。
+后两份来自技能根（不在本目录）：git 钩子与 CI 只认项目自己的文件，结构门禁必须落盘进项目才能在闸 2/3 生效。**聚合门禁本体不落盘**——由技能目录里的 `.agents/tsc.py verify` 承担（执行逻辑不进项目，由 AI 直接调用）。
 
 ## 归属规则（tsc-managed 标记）
 
-三份模板都带一行 `# tsc-managed`（`commitlint.config.js` 是 `// tsc-managed`）标记。落盘后脚本按标记判断归属：
+五份落盘件都带一行 `# tsc-managed` 标记（`commitlint.config.js` 是 `// tsc-managed`）。落盘后脚本按标记判断归属：
 
 | 项目文件状态 | `install` / `sync` 时的行为 |
 |---|---|
@@ -24,7 +26,7 @@
 | 不带标记，但正文与模板一致 | 旧版部署的文件，**一次性升级**为带标记的托管版 |
 | 不带标记，且正文与模板不同 | **项目已接管**：永不覆盖，只提示。想换最新模板就自行备份后删掉该文件重跑 `install` |
 
-也就是说：想保留自己的 CI / 钩子配置，就把文件里的标记行删掉再改——之后技能不会再碰它；保持标记就等于把这三个文件交给技能长期托管。
+也就是说：想保留自己的 CI / 钩子配置，就把文件里的标记行删掉再改——之后技能不会再碰它；保持标记就等于把这些文件交给技能长期托管。
 
 ## 三层各自拦什么（务必看清边界）
 
