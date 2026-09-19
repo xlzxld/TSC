@@ -2,11 +2,14 @@
 name: tsc
 description: |
   项目 AI 行为契约（AGENTS.md + .agents/）的分发、同步与门禁技能。
-  触发词：tsc、/tsc、接入契约、同步契约、契约体检、契约门禁、tsc verify。
-  用于往一个项目里接入或更新契约文件、运行聚合门禁、按契约执行体检与修复流程。
-  当用户提到"接入契约""跑契约门禁""契约体检""tsc"时使用本技能。
+  触发词：tsc、/tsc、接入契约、同步契约、更新契约、契约状态、契约体检、契约门禁、
+  tsc verify、结构体检、装结构门禁、结构门禁。
+  用于往一个项目里接入或更新契约文件（含从远程仓库拉取最新版）、运行聚合门禁、
+  按契约执行体检与修复流程，以及对 AI 生成的代码做结构完整性检查
+  （括号平衡/语法/缩进/调用形态）与钩子安装。
+  当用户提到"接入契约""更新契约""跑契约门禁""契约体检""tsc"时使用本技能。
 agent_created: true
-version: 3.2.0
+version: 3.3.0
 display_name: "TSC 契约"
 display_name_en: "TSC Contract"
 description_zh: "把 AI 行为契约一键接入项目，并提供同步与聚合门禁。"
@@ -24,8 +27,9 @@ visibility: "public"
 | `.agents/project.py` | 本项目自己的门禁命令，跨项目不通用 |
 | `.agents/VERSION`、`.agents/.source` | 版本号与上游位置，几百字节 |
 | `.pre-commit-config.yaml`、`commitlint.config.js`、`.github/workflows/gate.yml` | git 钩子与 CI **只能读项目自己的文件**，够不着技能目录 |
+| `.agents/structure_guard.py`、`.agents/bracket_lint.py` | 同上——结构门禁落盘件，git 钩子（闸2）与 CI（闸3）要读它们 |
 
-**不进项目**（留在技能目录，由你直接调用）：`tsc.py`、`AUDIT-SPEC.md`、`BOOTSTRAP.md`、`verify.ps1` / `verify.sh`、`test/`、`enforcement/` 模板原件。
+**不进项目**（留在技能目录，由你直接调用）：`tsc.py`、`install_hook.py`（安装器）、`AUDIT-SPEC.md`、`BOOTSTRAP.md`、`verify.ps1` / `verify.sh`、`test/`、`enforcement/` 模板原件。`structure_guard.py` / `bracket_lint.py` 是**双栖**：技能目录放正本（闸1 与单测用），项目里放落盘件（闸2/3/4 用，随 sync 托管更新）。
 
 - **技能目录**（即本文件所在目录）就是"上游"。下文用 `<SKILL_DIR>` 指代它。
 - **核心脚本**：`<SKILL_DIR>/.agents/tsc.py`，零第三方依赖（Windows 已实测；macOS / Linux 仅用标准库、无平台专属调用，待实测）。**它常驻技能目录，不复制进项目**。
@@ -38,8 +42,11 @@ visibility: "public"
 | --- | --- |
 | "tsc"、"契约状态"、"现在什么情况" | `status --project "<目标项目根>"` |
 | **"接入契约"**（或"上契约""把这个项目接上契约"） | 先 `install ... --dry-run` 报给用户看 → 确认后去掉 `--dry-run` 再跑 |
-| "同步契约"、"契约更新了拉一下" | 先 `sync ... --dry-run` 报给用户看 → 确认后去掉 `--dry-run` 再跑 |
+| "同步契约" | 先 `sync ... --dry-run` 报给用户看 → 确认后去掉 `--dry-run` 再跑（只从本地技能目录取内容，不联网） |
+| **"更新契约"**（或"契约更新了""拉最新""更新一下"） | ① 在 `<SKILL_DIR>` 里 `git pull` 更新技能目录正本（本机加代理参数：`git -c http.proxy=http://127.0.0.1:7897 -c https.proxy=http://127.0.0.1:7897 pull`；pull 失败如实报告并降级为纯 sync）→ ② 按上一行"同步契约"流程 sync 目标项目 → ③ 汇报版本变化（`git log --oneline -1` + 项目 VERSION 前后值） |
 | "体检"、"audit" | 读 `<SKILL_DIR>/.agents/AUDIT-SPEC.md`，按其铁律执行（**只读**，输出问题清单后立即停） |
+| "结构体检"（或"扫一下这个文件的结构"） | `python "<SKILL_DIR>/structure_guard.py" <文件/目录>`（只读，输出问题清单后停） |
+| **"装结构门禁"** | 按 §七：说明将发生什么 → 确认后跑 `install_hook.py` 装 pre-commit（闸2）；闸1 的 `.zcode/config.json` 接线也在此流程里做 |
 | "修复 X" | 读 `<SKILL_DIR>/.agents/AUDIT-SPEC.md` 定级表 + 项目 `AGENTS.md` §3 红线，按"先跑基线 → 最小改动 → 回归 → 门禁 → 原子提交"执行 |
 | "适配"、"初始化规范" | 读 `<SKILL_DIR>/.agents/BOOTSTRAP.md`，按其模式 A/B/C 执行 |
 
@@ -107,13 +114,15 @@ python3 "<SKILL_DIR>/.agents/tsc.py" check-config --project "<目标项目根>"
 
 ## 六、执法包是默认安装项
 
-`install` 会把执法包的**三份模板落到生效位置**（模板原件留在 `<SKILL_DIR>/.agents/enforcement/`，不复制进项目）：
+`install` 会把执法包的**五份模板落到生效位置**（模板原件留在 `<SKILL_DIR>`，不复制进项目）：
 
 | 模板 | 落到 | 作用 |
-| --- | --- | --- |
-| `gate.yml` | 项目的 `.github/workflows/gate.yml` | PR / 主干 push 上的 CI 门禁 |
+|---|---|---|
+| `gate.yml` | 项目的 `.github/workflows/gate.yml` | PR / 主干 push 上的 CI 门禁（含结构门禁步骤） |
 | `.pre-commit-config.yaml` | 项目根 | gitleaks 密钥扫描 + commitlint |
 | `commitlint.config.js` | 项目根 | Conventional Commits 规则 |
+| `structure_guard.py` | 项目的 `.agents/structure_guard.py` | 结构门禁落盘件（git 钩子 / CI 够不着技能目录，必须躺在项目里） |
+| `bracket_lint.py` | 项目的 `.agents/bracket_lint.py` | 结构门禁 L1 引擎落盘件 |
 
 落盘后**你要提醒用户两件只能由人做的事**（脚本做不了）：
 
@@ -132,4 +141,29 @@ python3 "<SKILL_DIR>/.agents/tsc.py" check-config --project "<目标项目根>"
 
 **三层各拦什么**（被问到时要能说清）：本地钩子只扫**本次暂存**的内容，CI 那一步才是**全历史**密钥扫描。所以"本地绿了"不等于仓库历史干净。
 
-**归属规则**：三份落盘件都带 `tsc-managed` 标记行。带标记 = 技能托管，`install` / `sync` 时随上游模板自动覆盖更新；用户删掉标记行再改内容 = 项目接管，技能永不覆盖只提示。被问到"为什么我的 gate.yml 被改回去了"时，答案就是标记还在——要自己维护就删标记行。
+**归属规则**：五份落盘件都带 `tsc-managed` 标记行。带标记 = 技能托管，`install` / `sync` 时随上游模板自动覆盖更新；用户删掉标记行再改内容 = 项目接管，技能永不覆盖只提示。被问到"为什么我的 gate.yml 被改回去了"时，答案就是标记还在——要自己维护就删标记行。
+
+## 七、结构门禁（structure-guard）
+
+AI 生成的代码常出**括号失衡、缩进错乱、结构被破坏**，最阴的是"括号总数平衡但结构已残缺"（平衡检查查不出）。三件套负责根治：
+
+| 文件 | 位置 | 作用 |
+|---|---|---|
+| `structure_guard.py` | 技能根正本 + 项目 `.agents/` 落盘件 | 统一入口：L0 编码 / L1 括号平衡 / L2 权威语法（ast.parse、node --check、bash -n、gofmt、PowerShell Parser 等，**缺工具自动降级并标注，不假绿**）/ L3 调用形态（LISP 家族：setq 偶数、if 2~3 段、defun 顶层）/ L4 项目断言（`<项目根>/guard_asserts.py` 约定 `run(paths)`） |
+| `bracket_lint.py` | 同上 | L1 引擎（语言感知括号栈 + 全角/弯引号 + 行列定位与修复建议） |
+| `install_hook.py` | 仅技能目录（安装器，不进项目） | 闸2：往任意 git 仓库装/卸 pre-commit（标记块幂等；钩子优先调项目内落盘件，可移植） |
+
+**为什么两个脚本落盘进项目**：git 钩子与 CI 只认项目自己的文件，够不着技能目录——与 gate.yml 同理，它们是"生效件"而非"执行逻辑"，随 `install` / `sync` 铺进 `.agents/` 并带 `tsc-managed` 标记托管更新。闸1 直接用技能目录正本（单源）。
+
+**退出码契约**（汇报时附实际命令与退出码，同 §四）：0=通过；1=代码结构问题（闸 2/3 拦截）；2=工具自身故障（**告警放行，不冒充代码问题**，CI 兜底）；3=配置非法。闸1 hook 模式（`--from-hook`）fail-open：stdin 拿不到、工具故障一律放行，只有确凿结构问题才退出 2。**行内豁免**：问题行写注释 `guard:skip`（或 `guard:skip=问题码`）豁免该行，输出会计数显示、不静默吞掉；超过 2MB 的文件自动只查 L0/L1 并标注降级。
+
+**四道闸**——装一次契约后闸 2/3/4 的物料自动就位，只有闸 1 需要单独接线：
+
+| 闸 | 触发 | 接线 |
+|---|---|---|
+| 1 AI 编辑后 | PostToolUse hook | 项目 `.zcode/config.json` 的 `hooks` 块——照 `<SKILL_DIR>/.zcode/config.json` 抄，args 改为 `["${ZCODE_PROJECT_DIR}/.agents/structure_guard.py", "--from-hook"]`（**`enabled: true` 不可少，否则钩子静默不跑**）。被拦后按报告的行列自修，**最多 3 轮**；3 轮仍失败停手向用户报告 |
+| 2 git 提交 | pre-commit | `python "<SKILL_DIR>/install_hook.py" --repo <项目根>`（装/卸幂等；用户说"装结构门禁"时执行） |
+| 3 CI | 推送/PR | gate.yml 自带"结构门禁"步骤（读项目落盘件、全仓、fail-closed），随 install/sync 自动落盘，无需手工接 |
+| 4 交付前 | verify | 项目 AGENTS.md §2「静态检查」填 `python .agents/structure_guard.py --quiet --color never .`（与 `.agents/project.py` 的 LINT_CMD 同源，check-config 校验一致） |
+
+**改三件套本体后**（含同步上游前）：`python structure_guard.py --selftest` 全绿 + `python -m unittest discover -s .agents/test -p "test_*.py"` 全绿，二者缺一不可——检查器坏了比没有更危险。

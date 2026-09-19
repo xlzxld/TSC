@@ -53,11 +53,17 @@ PROJECT_EXAMPLE = "project.example.py"
 SECTION2_HEADING = "## 2."
 
 # 执法包模板 → 落地位置（默认随 install 一起部署）
+# 键为相对上游根的路径，值为相对项目根的路径。
+# structure_guard.py / bracket_lint.py 是结构门禁落盘件：git 钩子与 CI 只认
+# 项目自己的文件，够不着技能目录——它们与 gate.yml 同属"必须躺在项目里"的生效件，
+# 不属"执行逻辑"（执行逻辑指 tsc.py / install_hook.py 这类安装与分发器）。
 ENFORCE_DIR = "enforcement"
 ENFORCE_DEPLOY = {
-    "enforcement/gate.yml": ".github/workflows/gate.yml",
-    "enforcement/.pre-commit-config.yaml": ".pre-commit-config.yaml",
-    "enforcement/commitlint.config.js": "commitlint.config.js",
+    ".agents/enforcement/gate.yml": ".github/workflows/gate.yml",
+    ".agents/enforcement/.pre-commit-config.yaml": ".pre-commit-config.yaml",
+    ".agents/enforcement/commitlint.config.js": "commitlint.config.js",
+    "structure_guard.py": ".agents/structure_guard.py",
+    "bracket_lint.py": ".agents/bracket_lint.py",
 }
 # 归属标记：模板里带此标记的落盘件视为"技能托管"，上游模板更新时自动覆盖；
 # 文件里没有此标记且内容对不上模板 → 视为用户已接管，永不覆盖。
@@ -461,7 +467,7 @@ def _enforce_actions(proj_root, upstream, merged_agents_text):
       部署/更新为 (相对路径, 内容) 列表，跳过为 (相对路径, 原因) 列表。
     """
     proj_root = Path(proj_root)
-    src_root = Path(upstream) / AGENTS_DIR
+    src_root = Path(upstream)
     try:
         if proj_root.resolve() == Path(upstream).resolve():
             # 母版/技能目录自举：模板原件已在 .agents/enforcement/，

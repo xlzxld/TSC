@@ -147,9 +147,16 @@ class EnforceOwnershipTests(unittest.TestCase):
 
     def test_fresh_deploy(self):
         deploy, update, skip = self.actions()
-        self.assertEqual(len(deploy), 3)
+        self.assertEqual(len(deploy), 5)  # 执法包三份 + 结构门禁落盘件两份
         self.assertEqual(update, [])
         self.assertEqual(skip, [])
+
+    def test_structure_guard_lands_with_managed_marker(self):
+        # 结构门禁落盘件必须带 tsc-managed 标记（否则托管更新机制认不出它）
+        tsc.deploy_enforcement(self.tmp, REPO, AGENTS_SAMPLE, dry_run=False)
+        for rel in (".agents/structure_guard.py", ".agents/bracket_lint.py"):
+            self.assertIn(tsc.MANAGED_MARKER,
+                          tsc.read_text(self.tmp / rel), rel)
 
     def test_managed_same_content_is_noop(self):
         _, _, _ = self.actions()
@@ -330,7 +337,7 @@ class InstallSyncE2ETests(unittest.TestCase):
         self.tmp = Path(tempfile.mkdtemp(prefix="tsc-e2e-"))
         self.addCleanup(shutil.rmtree, self.tmp, True)
 
-    def test_install_lands_seven_files(self):
+    def test_install_lands_nine_files(self):
         code, out = run_script("install", "--from", str(REPO), "--project", str(self.tmp))
         self.assertEqual(code, 0, out)
         expected = [
@@ -341,6 +348,8 @@ class InstallSyncE2ETests(unittest.TestCase):
             ".pre-commit-config.yaml",
             "commitlint.config.js",
             ".github/workflows/gate.yml",
+            ".agents/structure_guard.py",
+            ".agents/bracket_lint.py",
         ]
         for rel in expected:
             self.assertTrue((self.tmp / rel).is_file(), "缺少 %s" % rel)
@@ -349,8 +358,8 @@ class InstallSyncE2ETests(unittest.TestCase):
         version = (self.tmp / ".agents" / "VERSION").read_text(encoding="utf-8").strip()
         self.assertEqual(version, tsc.upstream_version(REPO))
 
-    def test_install_dry_run_previews_all_seven_files(self):
-        # 回归：dry-run 预览必须列全 7 个将写文件（旧版漏报 project.py 与 .source）
+    def test_install_dry_run_previews_all_nine_files(self):
+        # 回归：dry-run 预览必须列全 9 个将写文件（旧版漏报 project.py 与 .source）
         code, out = run_script("install", "--from", str(REPO), "--project", str(self.tmp), "--dry-run")
         self.assertEqual(code, 0, out)
         self.assertIn("未写入任何文件", out)
@@ -362,6 +371,8 @@ class InstallSyncE2ETests(unittest.TestCase):
             ".github/workflows/gate.yml",
             ".pre-commit-config.yaml",
             "commitlint.config.js",
+            ".agents/structure_guard.py",
+            ".agents/bracket_lint.py",
         ]:
             self.assertIn(rel, out, "dry-run 漏报 %s" % rel)
         self.assertEqual(list(self.tmp.rglob("*")), [])  # dry-run 零写盘
