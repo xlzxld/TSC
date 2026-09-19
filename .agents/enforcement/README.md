@@ -1,6 +1,6 @@
 # 执法包 (Enforcement)
 
-> **版本 v3.3.1** | 对应 `AGENTS.md` v3.3.1 的机械执法层：**文档管行为，钩子兜底线**。
+> **版本 v3.3.2** | 对应 `AGENTS.md` v3.3.2 的机械执法层：**文档管行为，钩子兜底线**。
 > **默认启用**：`tsc.py install` 会自动把本目录的模板落到下表位置，不需要手工拷贝。
 > 红线中可机器判定且已落地的项（密钥、提交格式、门禁、主干保护）在此落地；其余红线（如 R-3.1 吞异常、R-3.3 调试残留）由提示词纪律与人工审查兜底。
 
@@ -9,7 +9,7 @@
 | 模板（技能目录） | 自动落到目标项目 | 作用 |
 |---|---|---|
 | `.agents/enforcement/gate.yml` | `.github/workflows/gate.yml` | PR / 主干 push 上的 CI 门禁（含结构门禁步骤）；`branches:` 按 §2「主干分支」自动填 |
-| `.agents/enforcement/.pre-commit-config.yaml` | 项目根（同名） | 本地 git 钩子：密钥扫描 + 提交信息规范 |
+| `.agents/enforcement/.pre-commit-config.yaml` | 项目根（同名） | 本地 git 钩子：密钥扫描 + 提交信息规范 + 结构门禁（local 条目） |
 | `.agents/enforcement/commitlint.config.js` | 项目根 | Conventional Commits 规则 |
 | 根目录 `structure_guard.py` | `.agents/structure_guard.py` | 结构门禁落盘件：AI 代码结构完整性五层检查（括号/语法/缩进/形态） |
 | 根目录 `bracket_lint.py` | `.agents/bracket_lint.py` | 结构门禁的 L1 引擎（语言感知括号栈） |
