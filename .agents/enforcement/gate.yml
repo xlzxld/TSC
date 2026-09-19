@@ -40,6 +40,13 @@ jobs:
           npm i -D @commitlint/cli@21.2.2 @commitlint/config-conventional@21.2.2
           npx --no -- @commitlint/cli --from "${{ github.event.pull_request.base.sha || github.event.before }}" --to "${{ github.sha }}" --verbose
 
+      # 结构门禁：AI 生成代码的括号平衡/语法/缩进/调用形态五层检查（全仓）。
+      # 检查器是 tsc-managed 落盘件 .agents/structure_guard.py（含 bracket_lint.py），
+      # 随 tsc install / sync 自动更新——CI 够不着技能目录，所以它必须躺在项目里。
+      # 本层 fail-closed：退出码 1（代码问题）或 2（工具故障）都拦下。
+      - name: 结构门禁 (structure_guard, 全仓)
+        run: python3 .agents/structure_guard.py --quiet --color never .
+
       # 聚合门禁：读 .agents/project.py（唯一命令源），逐条执行。
       # 内联实现而不是调 .agents/tsc.py——执行逻辑常驻技能目录、不进项目，
       # CI runner 上没有技能目录，也不该为此引入对私有技能仓库的 token 依赖。

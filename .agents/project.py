@@ -17,8 +17,8 @@ __all__ = ["FMT_CHECK_CMD", "LINT_CMD", "TEST_CMD", "BUILD_CMD"]
 # 格式化检查：必须是 --check 等价命令，禁止写会改文件的写模式
 FMT_CHECK_CMD = None
 
-# 静态检查
-LINT_CMD = None
+# 静态检查：结构门禁（母版正本在仓库根；下游项目用落盘件 .agents/structure_guard.py）
+LINT_CMD = "python structure_guard.py --quiet --color never ."
 
 # 测试（macOS 上如无 python 命令，此处与 AGENTS.md §2 同步改成 python3）
 TEST_CMD = 'python -m unittest discover -s .agents/test -p "test_*.py"'

@@ -32,7 +32,7 @@
 | 技术栈 | Markdown 文档 + Python 3（仅标准库） | — |
 | 构建 (Build) | 无 | — |
 | 测试 (Test) | `python -m unittest discover -s .agents/test -p "test_*.py"` | ✅ 全绿；已知豁免清单内且非本次引入的失败不阻断，但须列出 |
-| 静态检查 (Lint) | 无 | — |
+| 静态检查 (Lint) | `python structure_guard.py --quiet --color never .` | ✅ 退出码 0；降级项须列出 |
 | 格式化 (Format) | 无 | — |
 | 主干分支 | main | ✅ 禁止未经 Pull Request 直接向主干提交 |
 | 已知豁免清单 | 无 | 唯一合法的基线失败白名单，新增须走 PR；按 `命令:条目描述` 逐条登记，便于机器比对与复核 |
@@ -74,4 +74,4 @@
 | `.agents/BOOTSTRAP.md` | 说"适配 / 初始化规范"或新项目部署时 |
 | `.agents/enforcement/`、`.agents/test/` | 前者由 `install` 默认落盘到生效位置；后者仅在验证契约自身时使用（AI 平时不读） |
 
-> 深度细则不内联进本文件——挤占高频规则的注意力预算。**部署单元 = 根目录 `AGENTS.md` + 项目内 `.agents/`（仅 `project.py` / `VERSION` / `.source`）+ 执法包三份落盘件**；执行逻辑常驻技能目录，接入与更新由技能统一执行。
+> 深度细则不内联进本文件——挤占高频规则的注意力预算。**部署单元 = 根目录 `AGENTS.md` + 项目内 `.agents/`（仅 `project.py` / `VERSION` / `.source`）+ 执法包与结构门禁落盘件（共五份）**；执行逻辑常驻技能目录，接入与更新由技能统一执行。
