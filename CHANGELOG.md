@@ -1,5 +1,16 @@
 # 变更记录 (CHANGELOG)
 
+## v3.3.2（2026-09-20）
+
+**依据**：给下游工程装闸 2 时实测发现——量化项目的钩子是 pre-commit framework 官方生成的（`pre-commit install` 产物），install_hook.py 的裸钩子方案按安全设计拒绝覆盖。方案文档 §4.5 本就规定"项目已用 pre-commit framework 时加 `repo: local` 条目（两种形态二选一）"，本条目进上游模板让所有 framework 用户开箱即得。
+
+| # | 变更 | 文件 | 依据发现 |
+|---|---|---|---|
+| 1 | 执法包模板 `.pre-commit-config.yaml` 新增第 3 个 local 条目 `structure-guard`：提交前对暂存文件跑 `.agents/structure_guard.py --staged`；未激活 framework 的项目此条目只是躺着不跑，零影响 | `.agents/enforcement/.pre-commit-config.yaml`、`.agents/enforcement/README.md` | 量化 `.git/hooks/pre-commit` 为 framework 生成（实测拒绝覆盖 rc=2） |
+
+**实测**：81 单测全绿｜`verify` rc=0｜`check-config` rc=0｜沙箱 install 落盘的 `.pre-commit-config.yaml` 含新条目。
+**版本**：v3.3.1 → v3.3.2（执法包模板增强，托管机制随 sync 自动分发）。
+
 ## v3.3.1（2026-09-20）
 
 **依据**：v3.3.0 落地后对全部 7 个下游工程跑全仓结构扫描的实测——4 个工程共 21 个文件被 L1 误报（G1 15 个 .vue、JSF 2 个 .js、HYT-CAD 3 份 wx_runner.lsp、HYT-NX 1 份 gate.yml），逐个查真实源码确认全部为语言特性缺口，无一真实结构问题。误报修正史是门禁工程最宝贵的东西，逐条修复并各固化回归用例。
