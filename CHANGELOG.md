@@ -1,6 +1,22 @@
 # 变更记录 (CHANGELOG)
 
-# 变更记录 (CHANGELOG)
+## v3.3.0（2026-09-20）
+
+**依据**：用户需求——全面完善结构门禁（推倒重做也可）、确保通用与"一说更新就能更新"、清理冗余、梳理结构，并更新全部下游工程。核心发现：v3.2.0+feat/structure-guard 原型把结构门禁定位为"常驻技能目录"，但 **git 钩子与 CI 只认项目自己的文件**——闸 2/3 在原型架构下根本跑不起来（gate.yml 的 CI runner 够不着技能目录，pre-commit 钩子烧死本机绝对路径）。本轮按仓库自身的"生效件必须躺在项目里"原则重构接线。
+
+| # | 变更 | 文件 | 依据发现 |
+|---|---|---|---|
+| 1 | **结构门禁改为落盘件**：`structure_guard.py` / `bracket_lint.py` 纳入执法包 `ENFORCE_DEPLOY`（5 项），随 install/sync 落到项目 `.agents/`，带 `tsc-managed` 标记托管更新；键改为相对上游根路径。闸 2 钩子从此调项目内相对路径（可移植），闸 3 CI 有检查器可跑，闸 4 verify 有命令可填 | `.agents/tsc.py`、`structure_guard.py`、`bracket_lint.py`（各加 tsc-managed 标记行）、`.agents/test/test_tsc.py` | 架构矛盾取证：gate.yml 内联壳哲学"CI runner 无技能目录"（v3.0.0 变更 21）与 SKILL.md §七"gate.yml 加一步 python structure_guard.py"直接冲突 |
+| 2 | **闸 3 接线**：gate.yml 新增独立步骤"结构门禁 (structure_guard, 全仓)"，读项目落盘件、fail-closed，随 install/sync 自动落盘，无需手工接 | `.agents/enforcement/gate.yml` | 同上；独立 step 不进内联 Python 壳，两套壳判定不漂移 |
+| 3 | **闸 4 接线**：母版 §2「静态检查」从"无"填为 `python structure_guard.py --quiet --color never .`，project.py `LINT_CMD` 同步——verify 从此带结构维度 | `AGENTS.md`、`.agents/project.py` | 方案文档 §4.5 契约层条目（P2 项） |
+| 4 | **闸 2 重构**：install_hook.py 标记块改名 `tsc-structure-guard`（弃旧名 `bracket-balance-guard`，原型未分发无需兼容）；钩子优先调项目落盘件相对路径，项目无落盘件时回退技能目录正本并告警；解释器改 `command -v` 探测（不再烧死 sys.executable）；删除死代码 `prev` | `install_hook.py`、`.agents/test/test_structure_guard.py` | 可移植性审查：原钩子把技能目录绝对路径与本机解释器路径烧进 `.git/hooks` |
+| 5 | **structure_guard 功能补强**（v1.2.0）：行内豁免 `guard:skip[=问题码]`（误报逃生口，输出计数显示不静默吞）；>2MB 大文件自动只查 L0/L1 并标注降级；L2 新增 YAML 深检（PyYAML 在场时，缺席降级）；shellcheck 增强（在场时对 .sh 追加 error 级检查）；清理 L2 检查器死形参；selftest 20→25 用例 | `structure_guard.py` | 方案文档 §4.3.2/§4.7 未落地项逐条补 |
+| 6 | **更新链路打通**：SKILL.md 触发表新增"**更新契约**"（pull 技能目录带代理 → sync 项目 → 汇报版本变化；pull 失败降级纯 sync）——"远程仓库更新后，在项目里说一句更新就更新"的完整落点；"同步契约"明确为不联网的本地分发 | `SKILL.md`、`README.md`、`使用手册.md` | 用户需求：远程更新后一说更新就能更新 |
+| 7 | **文档与结构梳理**：设计文档《AI代码结构完整性防护方案.md》移入 `.agents/`（根目录只留必读件+三件套正本）；README 结构图、接入后结构（7→9 文件）、执法包表（3→5 份）、已知限制勘误（sync 判据 v3.2.0 已改内容漂移，README 仍写版本号）；使用手册同步全部口径；本地清 `__pycache__/`×3 与 `.workbuddy/`（均 gitignored 缓存） | 全仓 | 用户需求：清除冗余、梳理结构 |
+| 8 | **测试**：install 断言 7→9 文件、执法包 3→5 项、新增落盘件 tsc-managed 标记断言与 install_hook 可移植性/幂等装卸断言；79 用例全绿 | `.agents/test/test_tsc.py`、`.agents/test/test_structure_guard.py` | R-1.3 行为级变更全带回归 |
+
+**版本**：v3.2.0 → v3.3.0（minor：结构门禁体系化接线 + 更新链路，无破坏性契约条款变更；存量项目跑一次 sync 即获得落盘件与新 gate.yml）。
+**本轮实测**：79 个单测全绿｜`structure_guard --selftest` 25/25｜沙箱 install 落盘 9 文件齐备（含结构门禁两件带标记）｜`verify` rc=0（LINT_CMD 真实执行结构门禁）｜`check-config` rc=0｜`wc -l AGENTS.md` = 77。
 
 ## v3.2.0（2026-09-12）
 
