@@ -46,7 +46,7 @@ import json
 import os
 import sys
 
-__version__ = "1.1.0"
+__version__ = "1.2.0"
 
 OPEN = {"(": ")", "[": "]", "{": "}"}
 CLOSE = {v: k for k, v in OPEN.items()}
@@ -146,6 +146,7 @@ PROFILES = {
         block=[("/*", "*/")],
         strings=_S_JS,
         regex=True,
+        template_interp=True,
     ),
     "go": dict(
         line=["//"],
@@ -167,8 +168,11 @@ PROFILES = {
         cpp_raw=True,
     ),
     "json": dict(line=[], block=[], strings=_S_JSON),
-    "yaml": dict(line=["#"], block=[], strings=_S_SOFT),
-    "toml": dict(line=["#"], block=[], strings=_S_SOFT),
+    # yaml / plain 是"文本为主"的格式：裸标量可含中文与圆括号（如 shell case 的
+    # `*.py)`），所以 () 不参与平衡（pairs 只留 [{），全角标点检测关闭
+    # （fw=False）——文案里的 （）：， 是合法内容，不是输入法事故。
+    "yaml": dict(line=["#"], block=[], strings=_S_SOFT, pairs="[{", fw=False),
+    "toml": dict(line=["#"], block=[], strings=_S_SOFT, pairs="[{"),
     "sh": dict(line=["#"], block=[], strings=_S_SH),
     "sql": dict(line=["--"], block=[("/*", "*/")], strings=_S_SQL),
     "lua": dict(line=["--"], block=[("--[[", "]]")], strings=_S_LUA),
@@ -182,6 +186,8 @@ PROFILES = {
         line=["//", "#", "--"],
         block=[("/*", "*/")],
         strings=[('"', '"', True, False, False), ("'", "'", True, True, False), ("`", "`", True, True, False)],
+        pairs="[{",
+        fw=False,
     ),
 }
 
@@ -234,6 +240,10 @@ class Scanner:
         self.depth = []          # (结束的行号, 该行结束时的嵌套深度)
         self._seen = set()
         self._capped = False
+        # profile 级开关：pairs=参与平衡的括号集（默认全部）；fw=全角/弯引号检测
+        # （代码类语言开，yaml/plain 等文本格式关——裸标量里的全角标点是内容不是事故）
+        self.pairs = set(self.p.get("pairs", "([{"))
+        self.fw = bool(self.p.get("fw", True))
 
     # ---------- 基础工具 ----------
 
@@ -431,6 +441,124 @@ class Scanner:
         self._adv(k)
         return True
 
+    # ---------- 模板串插值（JS `${...}` 内是完整表达式，可嵌套串与模板） ----------
+
+    def _scan_interp(self, k: int, line: int, ls: int):
+        """从 `${` 的 `{` 之后扫到配对 `}`。返回 (其后位置, 行号, 行首偏移,
+        括号事件表)——插值是真实 JS 表达式，其中的 ( ) [ ] { } 参与平衡，
+        事件带回主扫描按正常括号处理；嵌套模板的文本部分不产生事件。"""
+        src, n = self.src, self.n
+        d = 1
+        events = []
+        while k < n and d:
+            ch = src[k]
+            if ch == "{":
+                d += 1
+                events.append(("{", line, k - ls + 1))
+                k += 1
+            elif ch == "}":
+                d -= 1
+                if d:
+                    events.append(("}", line, k - ls + 1))
+                k += 1
+            elif ch in "\"'":
+                q = ch
+                k += 1
+                while k < n and src[k] != q:
+                    k += 2 if src[k] == "\\" else 1
+                k += 1
+            elif ch == "`":
+                k, line, ls = self._scan_nested_template(k, line, ls)
+            elif ch in "([":
+                events.append((ch, line, k - ls + 1))
+                k += 1
+            elif ch in ")]":
+                events.append((ch, line, k - ls + 1))
+                k += 1
+            else:
+                if ch == "\n":
+                    line += 1
+                    ls = k + 1
+                k += 1
+        return k, line, ls, events
+
+    def _scan_nested_template(self, k: int, line: int, ls: int):
+        """跳过一个嵌套模板串（其内部还可再含 `${...}` 插值）。返回
+        (其后位置, 行号, 行首偏移)——文本与嵌套插值整体作为原子跳过。"""
+        src, n = self.src, self.n
+        k += 1
+        while k < n:
+            ch = src[k]
+            if ch == "\\":
+                k += 2
+            elif ch == "`":
+                k += 1
+                break
+            elif src.startswith("${", k):
+                k, line, ls, _ = self._scan_interp(k + 2, line, ls)
+            else:
+                if ch == "\n":
+                    line += 1
+                    ls = k + 1
+                k += 1
+        return k, line, ls
+
+    def _try_js_template(self) -> bool:
+        """JS 模板串：`` `...${expr}...` ``——文本部分跳到闭 backtick，插值整体
+        递归扫描并把其中的括号事件回放到主平衡栈。没有这层，
+        `` `${a.map(x=>`<i>${x}</i>`)}（` `` 这类嵌套会把串边界认错。"""
+        if self.src[self.i] != "`":
+            return False
+        start_line, start_col = self.line, self._col()
+        src, n = self.src, self.n
+        k, line, ls = self.i + 1, self.line, self.ls
+        events = []
+        while k < n:
+            ch = src[k]
+            if ch == "\\":
+                k += 2
+                continue
+            if ch == "`":
+                k += 1
+                break
+            if src.startswith("${", k):
+                k, line, ls, ev = self._scan_interp(k + 2, line, ls)
+                events.extend(ev)
+                continue
+            if ch == "\n":
+                line += 1
+                ls = k + 1
+            k += 1
+        else:
+            self._report("unterminated", "字符串 ` 从这里开始，一直没闭合", start_line, start_col)
+            self._adv(n)
+            for c, ln, cl in events:
+                self._replay_bracket(c, ln, cl)
+            return True
+        self._adv(k)
+        for c, ln, cl in events:
+            self._replay_bracket(c, ln, cl)
+        return True
+
+    def _replay_bracket(self, c: str, ln: int, cl: int) -> None:
+        """把插值内捕获的括号事件按主循环同款规则记入平衡栈。"""
+        if c in OPEN:
+            self.stack.append((c, ln, cl))
+        elif c in CLOSE:
+            if not self.stack:
+                self._report("extra", f"多出来的闭合符 {c}，前面没有对应的 {CLOSE[c]}", ln, cl)
+            else:
+                op, ol, oc = self.stack[-1]
+                if OPEN[op] != c:
+                    self.stack.pop()
+                    self._report(
+                        "mismatch",
+                        f"这里是 {c}，但第 {ol} 行第 {oc} 列的 {op} 还没闭合（{op} 应该配 {OPEN[op]}）",
+                        ln, cl,
+                    )
+                else:
+                    self.stack.pop()
+
     # ---------- 主循环 ----------
 
     def run(self) -> None:
@@ -459,27 +587,32 @@ class Scanner:
                 continue
             if p.get("rust_char") and raw == "'" and self._try_rust_char():
                 continue
+            if p.get("template_interp") and raw == "`" and self._try_js_template():
+                continue
             if self._try_string():
                 continue
             if p.get("regex") and raw == "/" and self._try_js_regex():
                 continue
 
-            c = raw
-            if raw in FULLWIDTH_BRACKET:
-                c = FULLWIDTH_BRACKET[raw]
-                self._report("fullwidth", f"全角 {raw} 混进了代码，应写成半角 {c}")
-            elif raw in FULLWIDTH_PUNCT:
-                self._report("fullwidth", f"全角 {raw} 混进了代码，应写成半角 {FULLWIDTH_PUNCT[raw]}")
-                self.i += 1
-                continue
-            elif raw in SMART_QUOTES:
-                self._report("smartquote", f"弯引号 {raw} 混进了代码，应写成半角 {SMART_QUOTES[raw]}")
-                self.i += 1
-                continue
+            if self.fw and (raw in FULLWIDTH_BRACKET or raw in FULLWIDTH_PUNCT
+                            or raw in SMART_QUOTES):
+                if raw in FULLWIDTH_BRACKET:
+                    c = FULLWIDTH_BRACKET[raw]
+                    self._report("fullwidth", f"全角 {raw} 混进了代码，应写成半角 {c}")
+                elif raw in FULLWIDTH_PUNCT:
+                    self._report("fullwidth", f"全角 {raw} 混进了代码，应写成半角 {FULLWIDTH_PUNCT[raw]}")
+                    self.i += 1
+                    continue
+                else:
+                    self._report("smartquote", f"弯引号 {raw} 混进了代码，应写成半角 {SMART_QUOTES[raw]}")
+                    self.i += 1
+                    continue
+            else:
+                c = raw
 
-            if c in OPEN:
+            if c in OPEN and c in self.pairs:
                 self.stack.append((c, self.line, self._col()))
-            elif c in CLOSE:
+            elif c in CLOSE and CLOSE[c] in self.pairs:
                 if not self.stack:
                     self._report("extra", f"多出来的闭合符 {c}，前面没有对应的 {CLOSE[c]}")
                 else:

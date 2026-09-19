@@ -9,7 +9,7 @@ description: |
   （括号平衡/语法/缩进/调用形态）与钩子安装。
   当用户提到"接入契约""更新契约""跑契约门禁""契约体检""tsc"时使用本技能。
 agent_created: true
-version: 3.3.0
+version: 3.3.1
 display_name: "TSC 契约"
 display_name_en: "TSC Contract"
 description_zh: "把 AI 行为契约一键接入项目，并提供同步与聚合门禁。"

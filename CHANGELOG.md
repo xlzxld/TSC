@@ -1,5 +1,20 @@
 # 变更记录 (CHANGELOG)
 
+## v3.3.1（2026-09-20）
+
+**依据**：v3.3.0 落地后对全部 7 个下游工程跑全仓结构扫描的实测——4 个工程共 21 个文件被 L1 误报（G1 15 个 .vue、JSF 2 个 .js、HYT-CAD 3 份 wx_runner.lsp、HYT-NX 1 份 gate.yml），逐个查真实源码确认全部为语言特性缺口，无一真实结构问题。误报修正史是门禁工程最宝贵的东西，逐条修复并各固化回归用例。
+
+| # | 变更 | 文件 | 依据发现（真实源码取证） |
+|---|---|---|---|
+| 1 | **JS 模板串插值递归扫描**（bracket_lint v1.2.0）：`` `${...}` `` 内是完整 JS 表达式，可嵌套引号与模板串——线性扫串边界必错。新增 `_scan_interp` / `_scan_nested_template` / `_try_js_template`，插值内的 `()[]{}` 括号事件回放主平衡栈（是真代码不是文本） | `bracket_lint.py` | JSF `gym-system/public/app.js:361`：`` `${plans.map((p) => `<option ...>${esc(p.name)}（...）</option>`).join("")}` `` 嵌套模板+插值内引号+文案全角括号 |
+| 2 | **lisp 字符串允许字面跨行**：LISP_PROFILE `multi=True`，`_lisp_tokenize` 同步支持（token 记起始行列，扫描行号不漂移）；`_lisp_defun_top` 原生支持不变 | `structure_guard.py` | HYT-CAD `scripts/wx_runner.lsp:2006`：`(strcat "` 换行续写【精雕】文案是合法 AutoLISP 源码，该工程自有的 check_lisp.py 全家桶本就放行 |
+| 3 | **profile 级括号白名单 `pairs` 与全角检测开关 `fw`**：yaml/plain 只查 `[{`（裸标量里的 `()` 与全角标点是内容——如 `run:\|` 块里 shell 的 `case x in *.py)` 语法性右括号）；yaml/plain 关闭全角/弯引号检测（中文文案合法） | `bracket_lint.py` | HYT-NX 落盘的 gate.yml:41（YAML 内嵌 shell case 语法）；G1 各 .vue 文案里的 （）：， |
+| 4 | **标记模板文件跳过**：.vue/.svelte/.html/.htm/.astro 进 DOC_EXTS——HTML+JS 混合体的引号/文案语义由框架解析，平衡检查误报率 100%（G1 15/76 文件全红实证） | `structure_guard.py` | G1 `client/src/**.vue` 全部 |
+| 5 | selftest 用例 26→31（guard）/ 26（bracket_lint），四类误报各固化正反用例（嵌套模板合法/插值内失衡仍报、跨行串合法、shell case 不误报、裸标量全角不误报、vue 跳过） | `structure_guard.py`、`bracket_lint.py` | R-1.3 |
+
+**实测（修复前 → 修复后）**：G1 rc=1(15 文件) → rc=0；JSF rc=1(2) → rc=0；HYT-CAD rc=1(3) → rc=0；HYT-NX rc=1(1) → rc=0；其余 3 工程保持 rc=0；母版 81 单测全绿、`verify` rc=0、`check-config` rc=0、双 selftest 全绿。
+**版本**：v3.3.0 → v3.3.1（缺陷修复：纯误报消除，无行为语义变化；下游重跑 sync 即获得修复）。
+
 ## v3.3.0（2026-09-20）
 
 **依据**：用户需求——全面完善结构门禁（推倒重做也可）、确保通用与"一说更新就能更新"、清理冗余、梳理结构，并更新全部下游工程。核心发现：v3.2.0+feat/structure-guard 原型把结构门禁定位为"常驻技能目录"，但 **git 钩子与 CI 只认项目自己的文件**——闸 2/3 在原型架构下根本跑不起来（gate.yml 的 CI runner 够不着技能目录，pre-commit 钩子烧死本机绝对路径）。本轮按仓库自身的"生效件必须躺在项目里"原则重构接线。
