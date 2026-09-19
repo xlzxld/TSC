@@ -80,7 +80,7 @@ import shutil
 import subprocess
 import sys
 
-__version__ = "1.2.0"
+__version__ = "1.2.1"
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 if HERE not in sys.path:
@@ -93,14 +93,18 @@ MAX_HOOK_FILES = 20       # 闸1 单次最多检查的文件数
 MAX_MSG = 200             # 单条消息最长字符
 BIG_FILE = 2 * 1024 * 1024  # 超过此字节数只跑 L0/L1（深层解析对巨型生成物不划算）
 
-# 这些扩展名是文档/数据，不做结构检查（中文散文里的全角标点是合法内容）
-DOC_EXTS = {".md", ".txt", ".rst", ".adoc", ".log", ".csv", ".ini", ".cfg"}
+# 这些扩展名是文档/数据/标记模板，不做结构检查（中文散文与 HTML 文案里的
+# 全角标点是合法内容；.vue/.html 等标记文件的引号语义由框架解析，平衡检查必误报）
+DOC_EXTS = {".md", ".txt", ".rst", ".adoc", ".log", ".csv", ".ini", ".cfg",
+            ".vue", ".svelte", ".html", ".htm", ".astro"}
 # 递归扫描目录时跳过
 SKIP_DIRS = {".git", ".hg", ".svn", "__pycache__", "node_modules",
              ".venv", "venv", ".tox", "dist", "build", ".idea", ".vscode"}
 
-# bracket_lint 未覆盖的语言 profile 与扩展名
-LISP_PROFILE = dict(line=[";"], block=[], strings=[('"', '"', True, False, True)])
+# bracket_lint 未覆盖的语言 profile 与扩展名。
+# lisp 字符串允许字面跨行（AutoLISP/Elisp 语义，HYT-CAD wx_runner.lsp 实证：
+# strcat " 换行续写是合法源码，multi=False 会把它报成 unterminated 误报）
+LISP_PROFILE = dict(line=[";"], block=[], strings=[('"', '"', True, True, True)])
 EXTRA_PROFILES = {"lisp": LISP_PROFILE}
 EXTRA_EXT = {".lsp": "lisp", ".lisp": "lisp", ".el": "lisp", ".cl": "lisp"}
 
@@ -122,7 +126,7 @@ class _LispError(Exception):
 
 def _lisp_tokenize(src):
     """token: (kind, value, line, col)；kind in '(' ')' 'atom' 'str'。
-    字符串按不跨行处理（与 L1 的 lisp profile 一致），保证行号不漂移。"""
+    字符串可跨行（AutoLISP 语义），token 记起始行列，行号随扫描推进不漂移。"""
     toks = []
     i, n = 0, len(src)
     line, ls = 1, 0
@@ -151,13 +155,19 @@ def _lisp_tokenize(src):
             i += 1
             continue
         if ch == '"':
+            start_line, start_col = line, i - ls + 1
             j = i + 1
-            while j < n and src[j] not in ('"', "\n"):
+            while j < n:
                 if src[j] == "\\":
                     j += 2
-                else:
-                    j += 1
-            toks.append(("str", src[i:min(j + 1, n)], line, i - ls + 1))
+                    continue
+                if src[j] == '"':
+                    break
+                if src[j] == "\n":
+                    line += 1
+                    ls = j + 1
+                j += 1
+            toks.append(("str", src[i:min(j + 1, n)], start_line, start_col))
             i = min(j + 1, n)
             continue
         if ch in "()":
@@ -864,6 +874,16 @@ _SELFTEST = [
     ("豁免：指定问题码不命中仍报", "x.py", "x = (1  # guard:skip=fullwidth\n", False),
     ("yaml 断裂(L1 兜底+深检)", "x.yaml", "a: [1, 2\nb: 3\n", False),
     ("超大文件只跑 L1", "big.py", "# " + "a" * (2 * 1024 * 1024) + "\nx = (1\n", False),
+    # 以下四类来自下游工程实测误报的回归（2026-09-20，v3.3.1 修复）：
+    ("js 嵌套模板插值不误报", "x.js",
+     'const t = `${a.map((p) => `<o v="${p.id}">${esc(p.name)}（${p.k}）</o>`).join("")}`;\n', True),
+    ("js 插值内失衡仍报", "x.js", "const x = `${f(}`;\n", False),
+    ("lisp 跨行字符串不误报", "x.lsp",
+     '(defun f ()\n  (princ (strcat "\n【精雕】已将 " (itoa 1) " 个")))\n', True),
+    ("yaml 内嵌 shell case 不误报", "x.yaml",
+     "run: |\n  case \"$f\" in *.py) echo $f ;; esac\n", True),
+    ("yaml 裸标量全角不误报", "x.yaml", "title: 我的（备用）方案\n", True),
+    ("vue 标记文件跳过", "x.vue", "<div>（中文文案）{{ msg }}</div>\n", True),
 ]
 
 # 伪路径下 L1 的 plain profile 未闭合串不报警——md 用例依赖 skipped 分支，不受影响
