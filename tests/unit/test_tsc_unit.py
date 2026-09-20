@@ -401,7 +401,7 @@ class PluginStructureTests(unittest.TestCase):
 
     def test_no_hardcoded_proxy_anywhere_user_facing(self):
         # P2-02：公共仓库绝不绑定作者本机代理端口
-        for rel in ("README.md", "skills/tsc/SKILL.md", "docs/MANUAL_CN.md",
+        for rel in ("README.md", "skills/tsc/SKILL.md",
                     "commands/tsc.md", "commands/tsc-update.md", "commands/tsc-sync.md"):
             self.assertNotIn("127.0.0.1:7897", tsc.read_text(REPO / rel), rel)
 

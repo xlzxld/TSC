@@ -65,5 +65,4 @@ metadata:
 
 - `references/AUDIT-SPEC.md`：体检细则（说"体检"时）。
 - `references/BOOTSTRAP.md`：项目探测与 §2 填充流程（接入契约时）。
-- `docs/structure-guard-design.md`（插件根下）：结构门禁设计文档。
 - 结构门禁退出码：0=通过；1=代码结构问题；2=工具自身故障（告警放行）；3=配置非法；hook 模式 fail-open。行内豁免注释 `guard:skip`。

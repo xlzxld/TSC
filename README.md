@@ -15,7 +15,6 @@ TSC/
 ├─ scripts/                    # 实现：tsc.py（唯一 CLI）、structure_guard.py、bracket_lint.py、install_hook.py
 ├─ templates/                  # 项目落盘模板：AGENTS.md、project.example.py、enforcement/
 ├─ tests/unit  tests/e2e       # 快速单测（<10s）/ 端到端回归（<30s）
-├─ docs/                       # MANUAL_CN.md 使用手册、结构门禁设计、评测材料
 ├─ AGENTS.md                   # 本仓库自己的契约实例（母版在 templates/AGENTS.md）
 ├─ VERSION                     # 版本发布唯一真源
 └─ CHANGELOG.md
