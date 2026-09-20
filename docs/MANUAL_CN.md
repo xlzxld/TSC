@@ -1,6 +1,6 @@
 # 使用手册（大白话版）
 
-> 适用版本：v3.3.2 | 本手册是给人看的说明书，**不属于部署单元**——部署项目时不用拷它，它也不占 AI 的上下文。
+> 适用版本：v4.0.0 | 本手册是给人看的说明书，**不属于部署单元**——部署项目时不用拷它，它也不占 AI 的上下文。
 
 ---
 
@@ -19,38 +19,31 @@
 
 | 位置 | 一句话说明 | AI 什么时候读它 |
 |---|---|---|
-| `AGENTS.md`（根目录） | 规矩本体，不到 80 行 | **常驻**——AI 一进项目就自动读（主流工具都认根目录这个文件名） |
+| `AGENTS.md`（根目录） | 规矩本体，不到 80 行，带 `tsc-managed-contract` 所有权标记 | **常驻**——AI 一进项目就自动读（主流工具都认根目录这个文件名） |
 | `.agents/project.py` | 你自己项目的门禁命令 | 跑门禁时读 |
-| `.agents/VERSION`、`.agents/.source` | 版本号 + 上游在哪，几百字节 | 同步时读 |
+| `.agents/VERSION`、`.agents/.source` | 版本号 + 来源记录（来源只是记录，同步永远以当前已安装的 TSC 为准） | 同步时读 |
 | `.agents/structure_guard.py`、`.agents/bracket_lint.py` | 结构门禁（AI 代码的括号/语法/缩进完整性检查器） | 提交时由 git 钩子读、CI 上由 GitHub 读 |
 | `.github/workflows/gate.yml` | CI 门禁（含结构门禁步骤） | 提 PR / 推主干时由 GitHub 读 |
-| `.pre-commit-config.yaml`、`commitlint.config.js` | 本地 git 钩子 | 提交时由 git 读 |
+| `.pre-commit-config.yaml` | 本地 git 钩子（密钥扫描 + 结构门禁） | 提交时由 git 读 |
+| `commitlint.config.js`（仅 Node/JS 项目） | 提交信息规范 | 提交时由 git 读 |
 
-**整个项目只多 9 个文件、约 50KB。**
+**整个项目只多 8 个文件、约 50KB**（Node/JS 项目多 1 个 commitlint 配置；纯 Python 项目不引入任何 npm 依赖）。
 
-下面这些**留在技能目录里，不复制进项目**：`tsc.py`、`install_hook.py`、`AUDIT-SPEC.md`、`BOOTSTRAP.md`、`verify.ps1/sh`、`test/`、执法包模板原件。AI 要用时直接从技能目录调。
+下面这些**留在 TSC 插件目录里，不复制进项目**：`tsc.py`、`install_hook.py`、`structure_guard.py`/`bracket_lint.py` 正本、`AUDIT-SPEC.md`、`BOOTSTRAP.md`、测试与执法包模板原件。AI 要用时直接从插件目录调。
 
-有一类文件是**换不掉、必须在项目里**的：`.github/workflows/gate.yml`、两个钩子配置和结构门禁两个脚本——因为 **git 钩子和 GitHub CI 只认项目自己的文件**，它们够不着你本地的技能目录。
+有一类文件是**换不掉、必须在项目里**的：`.github/workflows/gate.yml`、钩子配置和结构门禁两个脚本——因为 **git 钩子和 GitHub CI 只认项目自己的文件**，它们够不着你本地的插件目录。
 
-> 早期版本会把整个 `.agents/` 复制进项目（约 97KB），现已瘦身。如果你在项目里看到 `tsc.py` 之类的旧文件，`status` 会提示它们是冗余的，**确认后自己删掉即可**（脚本不会代删），留着也不影响功能。
+> 如果项目里还留着旧版复制进来的 `tsc.py` 之类的执行文件，`status` 会提示它们是冗余的，**确认后自己删掉即可**（脚本不会代删），留着也不影响功能。
 
-> v3.0.0 相比 v2 的变化：以前要把"3 个文档 + 1 个目录"散在项目根目录，现在只留 `AGENTS.md` + 少量配置；执行逻辑更进一步收进技能目录。`sync` 会自动把旧结构搬进 `.agents/`，**不会自动删文件**。
+## 三、先装 TSC（一次）
 
-## 三、先装技能（一次，三平台通用）
+TSC 是标准 ZCode 插件：**插件市场 → 添加 → 添加插件市场**，粘贴 GitHub 仓库地址（`https://github.com/xlzxld/TSC`）或本地目录，然后在**个人**页找到"TSC 契约"点**安装**。装完它作为插件里的技能被自动发现，也可以整目录拷到其他平台的技能目录（如 `~/.claude/skills/tsc/`，仓库根的 `marketplace.json` 与 `.zcode-plugin/plugin.json` 是标准插件清单）。
 
-这个仓库本身就是技能，名字叫 `tsc`（根目录有 `SKILL.md`）。把仓库放进对应平台的技能目录：
-
-| 平台 | 放哪里 |
-|---|---|
-| macOS / Linux 的 Claude Code | `~/.claude/skills/tsc/` |
-| WorkBuddy | `~/.workbuddy/skills/tsc/` |
-| Windows 的 Claude Code | `%USERPROFILE%\.claude\skills\tsc\` |
-
-更新技能 = 在技能目录里 `git pull`（本机访问 GitHub 需走代理，加参数 `-c http.proxy=http://127.0.0.1:7897 -c https.proxy=http://127.0.0.1:7897`）。**没有打包、没有构建步骤。** 日常不用自己敲——在项目里对 AI 说"更新契约"，它会替你 pull 技能目录、再把新内容同步进项目。
+更新 TSC = 在项目里对 AI 说"**更新 TSC**"（git 安装副本会自动 pull；插件市场安装的副本按提示在 设置 → 插件管理 里点更新）。**没有打包、没有构建步骤。**
 
 ## 四、接入一个项目（每个项目一次）
 
-**在项目里对 AI 说一句："接入契约。"** 就完了。它会先给你看将改动什么（`--dry-run`），你点头后再真正写入。跑完项目根目录只多两样契约文件：`AGENTS.md` 和 `.agents/`；执法包的三份模板会自动铺到生效位置（CI 工作流、pre-commit 配置、commitlint 规则），不用你动手。
+**在项目里对 AI 说一句："接入契约。"** 就完了。它会先给你看将改动什么（`--dry-run`），你点头后再真正写入。跑完项目根目录只多两样契约文件：`AGENTS.md` 和 `.agents/`；执法包模板会自动铺到生效位置（CI 工作流、pre-commit 配置；Node/JS 项目另有 commitlint 规则），不用你动手。
 
 `python` 还是 `python3`、路径怎么拼，全是 AI 的事，你不用管。
 
@@ -58,7 +51,7 @@
 
 > 提醒：`project.py` 里四条命令若全是 `None`，门禁会以退出码 3 失败——未配置不是通过，本地与 CI 同口径。
 
-**还有两件只有人能做**（脚本做不到，AI 也只能提醒你）：① 跑一次 `pre-commit install && pre-commit install --hook-type commit-msg` 激活本地钩子（要 Node 和 Python；不想装就跳过，CI 能兜底）；② 到 GitHub 开分支保护，照 `.agents/enforcement/README.md` 勾四步。
+**还有两件只有人能做**（脚本做不到，AI 也只能提醒你）：① 需要本地钩子时跑一次 `pre-commit install && pre-commit install --hook-type commit-msg`（Node/JS 项目要先装 commitlint 依赖；不想被拦就别激活，CI 能兜底）；② 到 GitHub 开分支保护，照 TSC 插件目录 `templates/enforcement/README.md` 勾四步。
 
 ## 五、日常怎么用（说人话就行）
 
@@ -67,8 +60,10 @@
 | 你说 | 会发生什么 |
 |---|---|
 | **接入契约** | 装契约 + 装执法包与结构门禁落盘件，先给你看 diff 再写 |
-| **更新契约** | 先在技能目录 `git pull` 拉远程最新版，再走"同步契约"——远程仓库更新了就靠这句 |
-| **同步契约** | 拉本地技能目录的最新内容合并进来，**你的 §2 不会被覆盖** |
+| **更新 TSC** | 只升级 TSC 本体（技能/插件本身），不碰任何项目 |
+| **同步契约** / **更新契约** | 把当前已安装 TSC 的最新内容合并进项目，**你的 §2 不会被覆盖**；也不联网 |
+| **升级 TSC，并同步当前项目** | 一句话走完整条链：升本体 → 同步项目 → 跑门禁 → 汇报版本变化 |
+| **回滚契约** | 撤销最近一次接入/同步的写入（恢复上一版项目契约） |
 | **体检** | AI 全仓只读扫描（保证不改任何文件），给你一张 P0~P3 问题表，然后停下等你点单 |
 | **修复 A-01** | 按表修问题：先跑基线 → 最小改动 → 带回归测试 → 门禁 → 提交；要删东西、装依赖会先停下来等你确认 |
 | **结构体检** | 对指定文件 / 目录做结构完整性检查（括号平衡、语法、缩进、调用形态），只读不改 |
@@ -78,12 +73,14 @@
 
 **就这么几句话。而且"跑门禁"不需要你说**——AI 每次改完文件会自动跑，提交前必须全绿才敢说完成。它具体敲什么命令，不关你的事。
 
-> 兜底：AI 不在场（比如在 CI 里）时，脚本始终可用——它在**技能目录**里，用 `--project` 指目标项目：
+> 安全底线：项目里的 `AGENTS.md` 如果不是 TSC 装的（没有 `tsc-managed-contract` 标记），同步/接入会**拒绝接管**并输出冲突摘要，等你明确确认才会动它。
+
+> 兜底：AI 不在场（比如在 CI 里）时，脚本始终可用——它在**插件目录**里，用 `--project` 指目标项目：
 > ```bash
-> SK=~/.claude/skills/tsc      # 换成你的技能目录
-> python3 "$SK/.agents/tsc.py" verify       --project <项目根>
-> python3 "$SK/.agents/tsc.py" sync         --from "$SK" --project <项目根>
-> python3 "$SK/.agents/tsc.py" status       --project <项目根>
+> SK=~/.zcode/plugins/tsc       # 换成你的 TSC 插件目录
+> python3 "$SK/scripts/tsc.py" verify       --project <项目根>
+> python3 "$SK/scripts/tsc.py" sync         --project <项目根>
+> python3 "$SK/scripts/tsc.py" status       --project <项目根>
 > ```
 > Windows 把 `python3` 写成 `python`。省略 `--project` 时取当前目录，所以"先 cd 进项目再跑"也行。
 
@@ -107,7 +104,7 @@
 
 ## 六、怎么确认它真的有用（两种测法）
 
-**测提示词层**（AI 守不守得住）：新开一个会话，把 `.agents/test/EVAL-SET.md` 里的 7 句对抗话术逐条发给 AI，看它顶不顶得住。换模型、模型升级、改过契约之后各跑一次，结果记进 EVAL-SET 的回放表。
+**测提示词层**（AI 守不守得住）：新开一个会话，把 `docs/eval/EVAL-SET.md` 里的 7 句对抗话术逐条发给 AI，看它顶不顶得住。换模型、模型升级、改过契约之后各跑一次，结果记进 EVAL-SET 的回放表。
 
 **测机械层**（钩子拦不拦得住）：造反例——
 
@@ -116,15 +113,15 @@
 3. 故意改坏一个文件（删掉一个右括号），对 AI 说"跑门禁"（AI 本来也会自动跑）→ 结构门禁必须红，并给出精确行列；
 4. 直接 push 主干 → 分支保护必须拒（完整档）。
 
-任何一个没拦住 = 配置有问题，照 `.agents/enforcement/README.md` 检查。
+任何一个没拦住 = 配置有问题，照 TSC 插件目录 `templates/enforcement/README.md` 检查。
 
 ## 七、维护（很少发生，发生了照做就行）
 
 | 情况 | 做法 |
 |---|---|
 | 换了测试框架 / lint 工具 | 改 `.agents/project.py` + `AGENTS.md` §2，让 AI 跑一次 `check-config` 确认两边一致 |
-| 契约出了新版本 | 对 AI 说"同步契约"；§2 与 `project.py` 不会被覆盖 |
-| 想改规矩本身 | 走 PR：改内容 + 同步 `VERSION` 与六处版本头 + CHANGELOG 记一笔 + 跑 `verify` 与 `wc -l AGENTS.md` |
+| TSC 出了新版本 | 说"升级 TSC，并同步当前项目"；§2 与 `project.py` 不会被覆盖 |
+| 想改规矩本身 | 走 PR：改 TSC 仓库的 `templates/AGENTS.md` + bump 根 `VERSION` + CHANGELOG 记一笔 + 跑 `verify` 与 `wc -l AGENTS.md` |
 | 项目里有历史遗留问题（老 lint 警告、一直跳过的测试） | 登记"已知豁免清单"：只管新增，不管存量。每条按 `命令:条目描述` 格式写，方便日后核对 |
 
 ## 八、常见问题
@@ -136,7 +133,7 @@
 别留两份，人工合并成一份。两份契约并存会打架，AI 不知道听谁的。
 
 **Q：一定要装执法包吗？**
-现在没有"装不装"的选择——"接入契约"时三份落盘件（CI 工作流、pre-commit 配置、commitlint 规则）会自动铺进项目。你能选的只有：本地钩子激不激活——不想被拦就别执行 `pre-commit install`，CI 那层照常兜底。另外现在本机 **没有 `make`**，所以门禁统一走 Python，不再依赖 make。
+现在没有"装不装"的选择——"接入契约"时执法包落盘件（CI 工作流、pre-commit 配置；Node/JS 项目另有 commitlint 规则）会自动铺进项目。你能选的只有：本地钩子激不激活——不想被拦就别执行 `pre-commit install`，CI 那层照常兜底。纯 Python 项目不会被塞进任何 npm 依赖。
 
 **Q：为什么死守 80 行不让加规矩？**
 规矩越多，AI 越记不住、越不生效。这是这套设计的第一原则：常驻提示词必须轻，机器能管的交给钩子，不占提示词预算。

@@ -3,8 +3,9 @@
 # 落盘位置：项目根 .pre-commit-config.yaml（由 `tsc.py install` 自动部署）
 # 激活：pre-commit install && pre-commit install --hook-type commit-msg
 #
-# 注意：本文件里的两个钩子**不是可选项**。一旦装了本地钩子，它们就会真实拦截提交；
+# 注意：本文件里的钩子**不是可选项**。一旦装了本地钩子，它们就会真实拦截提交；
 # 没装依赖包时不是"跳过"而是"报错拦住"。启用前请按下面各钩子的说明装好依赖。
+# 非 Node 项目部署时，tsc 会自动剔除 node-only 区块（commitlint），不会引入 npm。
 
 repos:
   # 1) 密钥扫描
@@ -12,12 +13,13 @@ repos:
   #    这对"防止新密钥进来"是够的；但它不翻历史，仓库里已有的旧密钥不会被它发现。
   #    想连历史一起清，另跑一次：gitleaks git --redact --log-opts="--all"
   - repo: https://github.com/gitleaks/gitleaks
-    rev: v8.30.1
+    rev: 83d9cd684c87d95d656c1458ef04895a7f1cbd8e # v8.30.1（钉 commit SHA，杜绝浮动 tag）
     hooks:
       - id: gitleaks
         name: 密钥扫描 (gitleaks)
 
-  # 2) 提交信息规范（Conventional Commits）
+# tsc:begin:node-only
+  # 2) 提交信息规范（Conventional Commits）——仅 Node/JS 项目（tsc 自动探测 package.json）
   #    依赖：npm i -D @commitlint/cli @commitlint/config-conventional
   #    说明：entry 必须写 `@commitlint/cli`（包名），不能写 `commitlint`——
   #    后者不是 npm 包名，npx 会去下载一个不存在的包并直接失败，把提交堵死。
@@ -29,15 +31,16 @@ repos:
         language: system
         entry: npx --no -- @commitlint/cli --edit
         stages: [commit-msg]
+# tsc:end:node-only
 
   # 3) 结构门禁（零依赖本地脚本，随 tsc install / sync 落盘到 .agents/）
   #    提交前对暂存文件跑五层结构检查（括号平衡/语法/缩进/形态）。
   #    只在本钩子层（pre-commit framework）激活时运行；
-  #    用 install_hook.py 装裸钩子的项目与此条目二选一（叠加只是重复检查，不冲突）。
+  #    用 install_hook.py 裸钩子的项目与此条目二选一（叠加只是重复检查，不冲突）。
   - repo: local
     hooks:
       - id: structure-guard
         name: 结构门禁 (structure_guard)
         language: system
-        entry: python .agents/structure_guard.py --staged --quiet --color never
+        entry: python3 .agents/structure_guard.py --staged --quiet --color never
         pass_filenames: false

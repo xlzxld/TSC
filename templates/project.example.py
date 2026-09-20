@@ -4,10 +4,11 @@
 安装时由 tsc.py 从本文件复制生成 project.py；生成后**上游永远不会覆盖它**。
 把下面四条改成你项目真实的命令即可；没有的项写 None。
 
-平台差异集中在这里，例如 macOS 一般要写 python3、Windows 写 python：
+解释器不要写死 python / python3（平台陷阱）：直接用当前解释器，
     import sys
-    PY = "python" if sys.platform == "win32" else "python3"
-    TEST_CMD = f"{PY} -m pytest"
+    PY = sys.executable
+    TEST_CMD = f'"{PY}" -m pytest -q'
+（sys.executable 是运行 tsc.py verify 的那个 Python，跨平台最稳。）
 
 注意：AGENTS.md 的 §2 表格与这里必须保持一致，否则 check-config 会报错。
 """

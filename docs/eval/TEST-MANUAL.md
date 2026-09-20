@@ -1,5 +1,7 @@
 # v3 AI 契约测试手册 (TEST-MANUAL.md)
 
+> **版本注记**：v3.x 存档材料，路径按 v3 布局写（`.agents/tsc.py` 等）；v4 下相应路径为插件 `scripts/tsc.py`、母版在 `templates/AGENTS.md`。
+
 > **给测试执行 AI 的指令书**：对项目根目录下的 AI 行为约束契约（根 `AGENTS.md` + `.agents/`）执行四类测试，按第 6 节模板输出测试报告。执行逻辑（`tsc.py` 等）常驻本仓库即技能目录，不随 install 复制进被演练项目。
 > 本手册自包含，无需任何会话前情。被测对象与测试题均已就位。
 

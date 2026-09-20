@@ -12,8 +12,10 @@ import tempfile
 import unittest
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-if ROOT not in sys.path:
-    sys.path.insert(0, ROOT)
+SCRIPTS = os.path.join(ROOT, "scripts")
+for p in (SCRIPTS,):
+    if p not in sys.path:
+        sys.path.insert(0, p)
 
 import structure_guard as sg  # noqa: E402
 
@@ -133,13 +135,13 @@ class CliTests(unittest.TestCase):
             self.assertEqual(sg.main([p, "--color", "never", "--quiet"]), 0)
 
     def test_guard_scripts_themselves_are_clean(self):
-        for rel in ("bracket_lint.py", "install_hook.py", "structure_guard.py"):
+        for rel in ("scripts/bracket_lint.py", "scripts/install_hook.py", "scripts/structure_guard.py"):
             self.assertEqual(sg.main([os.path.join(ROOT, rel), "--quiet",
                                       "--color", "never"]), 0, rel)
 
     def _run_hook(self, stdin_text):
         return subprocess.run(
-            [sys.executable, os.path.join(ROOT, "structure_guard.py"), "--from-hook"],
+            [sys.executable, os.path.join(SCRIPTS, "structure_guard.py"), "--from-hook"],
             input=stdin_text, capture_output=True, text=True,
             encoding="utf-8", errors="replace")
 
@@ -186,12 +188,12 @@ class ExpandPathsTests(unittest.TestCase):
 
 class InstallHookContractTests(unittest.TestCase):
     def test_hook_targets_guard_with_staged_mode(self):
-        text = src_of("install_hook.py")
+        text = src_of("scripts/install_hook.py")
         self.assertIn("structure_guard.py", text)
         self.assertIn("--staged", text)
 
     def test_hook_blocks_only_on_exit_1(self):
-        text = src_of("install_hook.py")
+        text = src_of("scripts/install_hook.py")
         self.assertIn('-eq 1', text)
         self.assertIn("本次不拦截", text)
 

@@ -1,8 +1,8 @@
 # 规范部署与适配生成器 (BOOTSTRAP.md)
 
-> **版本 v3.3.2** | 与仓库根 `AGENTS.md` v3.3.2、`.agents/AUDIT-SPEC.md` 配套。
-> **单源原则**：本文件**不内嵌**契约模板。母版 = 仓库根 `AGENTS.md`；执行逻辑常驻技能目录（`<SKILL_DIR>/.agents/`），**不复制进项目**。契约只有一个真身，禁止再复制出第二份。
-> **使用方法**：由 AI 代跑 `python3 "<SKILL_DIR>/.agents/tsc.py" install --from "<SKILL_DIR>" --project <项目根>`（建议先加 `--dry-run` 看变化），然后说"适配 / 初始化规范"；或直接说"读取通用母版，自动扫描当前项目，生成定制化 AGENTS.md。有无法确定的配置再问我。"
+> **版本 v4.0.0** | 与 `templates/AGENTS.md` v4.0.0、`references/AUDIT-SPEC.md` 配套。
+> **单源原则**：本文件**不内嵌**契约模板。母版 = 插件目录 `templates/AGENTS.md`；执行逻辑常驻插件 `scripts/`，**不复制进项目**。契约只有一个真身，禁止再复制出第二份。
+> **使用方法**：由 AI 代跑 `python3 "<插件根>/scripts/tsc.py" install --project <项目根>`（建议先加 `--dry-run` 看变化），然后说"适配 / 初始化规范"；或直接说"读取通用母版，自动扫描当前项目，生成定制化 AGENTS.md。有无法确定的配置再问我。"
 
 ---
 
@@ -32,7 +32,7 @@
 
 1. 用阶段 0 探测结果填充 AGENTS.md §2；探测不到的项如实写"无"或向用户提问，**禁止臆造**。
 2. 把同样的取值填进 `.agents/project.py`（四条命令变量），然后由 AI 代跑 `tsc.py check-config`——**§2 表格与 project.py 必须同源**，不一致会退出码 1，禁止只改一处。
-3. 校验（模式 A / B / C 均适用）：`wc -l AGENTS.md` < 80（LF 计）；`tsc.py verify` 在终端实测可执行（附退出码）。两命令均从 `<SKILL_DIR>/.agents/tsc.py` 调用、以 `--project` 指向目标项目。
+3. 校验（模式 A / B / C 均适用）：`wc -l AGENTS.md` < 80（LF 计）；`tsc.py verify` 在终端实测可执行（附退出码）。两命令均从 `<插件根>/scripts/tsc.py` 调用、以 `--project` 指向目标项目。
 4. 目标项目存在基线失败（存量 lint 警告、跳过测试）时，登记进"已知豁免清单"行——**只登记，不放宽验证条件**。
 
 ## 阶段 4：完成反馈（如实陈述，禁止绝对化承诺）
@@ -40,4 +40,4 @@
 输出三件事：部署/更新了哪些文件；§2 与 `project.py` 各项取值的来源（探测文件 / 用户确认）；遗留未决项清单。
 
 > 禁止使用"AI 将全自动遵守此契约"等话术——契约降低违规概率，机械执法兜住底线：
-> 密钥泄露 → gitleaks（`.agents/enforcement/.pre-commit-config.yaml` 已随 `install` 自动落盘，或 CI）；Conventional Commits → commitlint（同上）；主干保护 → branch protection（须人工开）；闭环验证 → 一条聚合命令，由 AI 自动执行。
+> 密钥泄露 → gitleaks（`.pre-commit-config.yaml` 已随 `install` 自动落盘，或 CI）；Conventional Commits → commitlint（仅 Node/JS 项目部署）；主干保护 → branch protection（须人工开）；闭环验证 → 一条聚合命令，由 AI 自动执行。

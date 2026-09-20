@@ -1,5 +1,7 @@
 # 实测验收清单 (ACCEPTANCE.md)
 
+> **版本注记**：v3.x 存档材料，路径按 v3 布局写（`.agents/tsc.py`）；v4 下相应路径为插件 `scripts/tsc.py`，安装命令不再需要 `--from`。
+
 > **用途**：契约全流程实测。在演练项目**新开会话**，按 A1→A4 逐场景执行，全部 PASS 才算验收。
 > **前置**：已执行 `python3 <技能目录>/.agents/tsc.py install --from <技能目录> --project <演练项目>`，落地单元 = 根目录 `AGENTS.md` + `.agents/`（`project.py` / `VERSION` / `.source`）+ 执法包三份落盘件。
 

@@ -1,0 +1,11 @@
+{
+  "name": "tsc",
+  "version": "4.0.0",
+  "description": "TSC contract: install, sync and enforce an AI coding contract (AGENTS.md + gates) in any project. Install the contract with one phrase, sync it after plugin updates, run timed aggregate gates, and roll back on failure.",
+  "author": {
+    "name": "xlzxld"
+  },
+  "skills": "skills",
+  "commands": "commands",
+  "hooks": "hooks/hooks.json"
+}

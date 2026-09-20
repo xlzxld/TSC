@@ -11,7 +11,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 class BracketLintSelftestTests(unittest.TestCase):
     def test_builtin_selftest_green(self):
         rc = subprocess.run(
-            [sys.executable, os.path.join(ROOT, "bracket_lint.py"), "--selftest"],
+            [sys.executable, os.path.join(ROOT, "scripts", "bracket_lint.py"), "--selftest"],
             capture_output=True, text=True, encoding="utf-8", errors="replace")
         self.assertEqual(rc.returncode, 0, rc.stdout + rc.stderr)
 

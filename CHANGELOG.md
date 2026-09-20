@@ -1,5 +1,33 @@
 # 变更记录 (CHANGELOG)
 
+## v4.0.0（2026-09-21）
+
+**依据**：《TSC 全方位评审与改造规格 v1.0》。目标不是继续堆规则，而是把 TSC 收敛成真正可安装、可发现、可使用、可升级、可回滚的 Agent Skill / ZCode Plugin。
+
+### P1（全部修复）
+
+| ID | 修复 |
+|---|---|
+| P1-01 | 上游解析改为 `显式 --source > 当前已安装本体`；项目 `.agents/.source` 降为纯 provenance（结构化 JSON，旧版纯路径兼容读取），不再参与选源、不再阻塞升级 |
+| P1-02 | 改为标准 ZCode Plugin：`.zcode-plugin/plugin.json` + `skills/tsc/SKILL.md` + `hooks/hooks.json` + `commands/` + 根 `marketplace.json`；Skill 仍可独立拷入其他平台技能目录 |
+| P1-03 | AGENTS.md 所有权 marker `<!-- tsc-managed-contract:v4 -->`：无 marker 的外部 AGENTS.md 默认只读（sync/install 拒绝接管并输出冲突摘要，仅 `install --force` 显式接管）；旧版部署项目（有 `.agents/VERSION` 无 marker）首次 sync 一次性升级并补 marker |
+| P1-04 | 只有检测到 `package.json` 的 Node/JS 项目才部署 commitlint；`.pre-commit-config.yaml` 的 Node 专属区块（`# tsc:begin/end:node-only`）在非 Node 项目部署时整段剔除；CI commitlint 步骤条件改为只认 `commitlint.config.js`——纯 Python 项目零 npm 依赖 |
+| P1-05 | verify 每条门禁命令加超时（默认 600s；`--timeout` 或 project.py `GATE_TIMEOUTS` 覆盖），超时杀整个进程组、退出码 124、明确报错；CI 内联壳同步实现 |
+
+### P2 / 结构（要点）
+
+- 目录重组：脚本进 `scripts/`（tsc.py / structure_guard.py / bracket_lint.py / install_hook.py）、模板进 `templates/`（AGENTS.md 母版 / project.example.py / enforcement/）、测试分 `tests/unit`（<10s）+ `tests/e2e`（<30s）、文档进 `docs/`（ASCII 文件名：MANUAL_CN.md / structure-guard-design.md / eval/）。
+- SKILL.md frontmatter 只留标准 `name/description`，其余进 `metadata`；版本以 `plugin.json` 为准。
+- 删除 README/SKILL/手册中硬编码的本机代理 `127.0.0.1:7897`（P2-02）；插件 Hook 改用 `${ZCODE_PLUGIN_ROOT}/scripts/structure_guard.py`（P2-03）。
+- gitleaks pre-commit 模板钉 commit SHA `83d9cd6`（v8.30.1）（P2-06）；`update` / `sync` 语义分离（P2-07）。
+- 版本发布真源只留根 `VERSION`；`.agents/VERSION` 变为部署生成物（gitignore）。
+- 新增 `doctor`（只读诊断 ready/not-ready，支持 `--json`）、`update`（本体 git pull，带超时；非 git 副本提示宿主更新）、`rollback`（撤销最近一次 install/sync 的写入）。
+- project.example.py 用 `sys.executable` 示范，消除 python/python3 平台陷阱（P2-05）。
+- README/手册只留当前行为，历史迭代叙述移除（P2-11）。
+
+**实测**：unit 84 + e2e 33 全绿（合计 ~8.5s）；`verify` rc=0；`check-config` rc=0；`wc -l AGENTS.md`=78<80；端到端 smoke（本机安装→发现→调用→升级链→回滚）通过；macOS 实测，Linux 由 CI（ubuntu-latest）覆盖，Windows 待实测。
+**版本**：v3.3.2 → v4.0.0（布局重组 + 所有权边界，旧版项目跑一次 `sync` 自动升级补 marker）。
+
 ## v3.3.2（2026-09-20）
 
 **依据**：给下游工程装闸 2 时实测发现——量化项目的钩子是 pre-commit framework 官方生成的（`pre-commit install` 产物），install_hook.py 的裸钩子方案按安全设计拒绝覆盖。方案文档 §4.5 本就规定"项目已用 pre-commit framework 时加 `repo: local` 条目（两种形态二选一）"，本条目进上游模板让所有 framework 用户开箱即得。
