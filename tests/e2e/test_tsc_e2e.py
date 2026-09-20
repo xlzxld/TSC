@@ -227,9 +227,23 @@ class UpgradeTests(E2EBase):
         self.assertEqual((self.tmp / ".agents" / "VERSION").read_text().strip(), "4.0.0")
 
     def test_update_on_nongit_copy_reports_host_update_path(self):
-        """规格 §10：没有 .git 的已安装副本 → 提示宿主升级机制，rc=3。"""
-        code, out = run_script("update")
-        self.assertEqual(code, 3, out)
+        """规格 §10：没有 .git 的已安装副本 → 提示宿主升级机制，rc=3。
+
+        夹具在临时目录构造一份无 .git 的插件副本（模拟宿主市场安装），
+        从该副本自己调 update——不能直接对本仓库跑：仓库自身是 git 安装，
+        update 会走真实 git pull（慢且依赖网络）。
+        """
+        copy = self.tmp / "installed-tsc"
+        shutil.copytree(
+            REPO, copy,
+            ignore=shutil.ignore_patterns(".git", "__pycache__", ".agents", ".tsc-tmp"),
+        )
+        proc = subprocess.run(
+            [sys.executable, str(copy / "scripts" / "tsc.py"), "update"],
+            capture_output=True,
+        )
+        out = (proc.stdout + proc.stderr).decode("utf-8", errors="replace")
+        self.assertEqual(proc.returncode, 3, out)
         self.assertIn(".git", out)
         self.assertIn("宿主", out)
 
