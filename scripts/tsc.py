@@ -96,6 +96,30 @@ CONTRACT_MARKER = "tsc-managed-contract"
 CONTRACT_MARKER_VERSION = "v4"
 CONTRACT_MARKER_LINE = "<!-- %s:%s -->" % (CONTRACT_MARKER, CONTRACT_MARKER_VERSION)
 
+# 行首注释符：标记必须紧跟其后才算"声明"；正文里提及标记字符串不作数。
+COMMENT_PREFIXES = ("<!--", "//", "#")
+
+
+def is_marker_line(line, marker):
+    """该行是否"整行声明"了归属标记。
+
+    只有注释符打头、且注释正文以 marker 开头的行才算声明，例如
+    `<!-- tsc-managed-contract:v4 -->`、`# tsc-managed —— ...`、`// tsc-managed —— ...`。
+    说明文字（如"本文件带 tsc-managed 标记"）、被反引号/引号包起来的示例都不算——
+    否则"提及"会被误判成"声明"，进而覆盖本不该接管的文件。
+    """
+    text = line.strip()
+    for prefix in COMMENT_PREFIXES:
+        if text.startswith(prefix):
+            return text[len(prefix):].lstrip().startswith(marker)
+    return False
+
+
+def has_marker(content, marker):
+    """内容中是否存在整行标记声明（任一行命中即可）。"""
+    return any(is_marker_line(line, marker) for line in content.splitlines())
+
+
 # .pre-commit-config.yaml 里的 Node 专属区块：非 Node 项目部署时整段剔除。
 NODE_REGION_BEGIN = "# tsc:begin:node-only"
 NODE_REGION_END = "# tsc:end:node-only"
@@ -371,7 +395,7 @@ def contract_ownership(proj_root):
 
     返回：
         none        没有 AGENTS.md（全新接入）
-        managed     带 tsc-managed-contract 标记（TSC 托管）
+        managed     带"整行" tsc-managed-contract 标记（TSC 托管；正文里提及该字符串不算）
         legacy      无标记，但 .agents/VERSION 是 TSC 部署的版本文件
                     （旧版安装的项目；只允许一次性升级：重建时补上标记）
         foreign     外部项目自己的 AGENTS.md（无标记、无 TSC 部署证据）——默认只读，不接管
@@ -379,7 +403,7 @@ def contract_ownership(proj_root):
     agents_md = Path(proj_root) / AGENTS_MD
     if not agents_md.is_file():
         return "none"
-    if CONTRACT_MARKER in read_text(agents_md):
+    if has_marker(read_text(agents_md), CONTRACT_MARKER):
         return "managed"
     if (Path(proj_root) / AGENTS_DIR / VERSION_FILE).is_file():
         return "legacy"
@@ -578,7 +602,7 @@ def section2_value(block, row_prefix):
 def _enforce_actions(proj_root, upstream, merged_agents_text):
     """算出执法包落盘动作，不写任何文件（判定单源，供部署与早退检查共用）。
 
-    归属规则（MANAGED_MARKER = "tsc-managed"）：
+    归属规则（MANAGED_MARKER = "tsc-managed"，须为整行注释声明，正文提及不算）：
     - 项目文件带标记 → 技能托管：以上游模板为准，内容不同就更新；
     - 不带标记但正文与模板一致（忽略标记行与 gate.yml 分支名）→ 旧版部署
       的文件，一次性升级为带标记的托管版；
@@ -599,7 +623,7 @@ def _enforce_actions(proj_root, upstream, merged_agents_text):
 
     def normalize(text):
         # 去掉归属标记行，行尾统一，用于"正文是否一致"的比较
-        lines = [ln for ln in text.splitlines() if MANAGED_MARKER not in ln]
+        lines = [ln for ln in text.splitlines() if not is_marker_line(ln, MANAGED_MARKER)]
         return "\n".join(lines).rstrip("\n")
 
     def debranch(text):
@@ -624,7 +648,7 @@ def _enforce_actions(proj_root, upstream, merged_agents_text):
             continue
 
         existing = read_text(dst)
-        if MANAGED_MARKER in existing:
+        if has_marker(existing, MANAGED_MARKER):
             # 技能托管：上游模板说了算
             if existing != content:
                 update.append((rel_dst, content))
@@ -1360,7 +1384,7 @@ def cmd_doctor(proj_root, upstream, as_json=False):
         dst = proj_root / rel_dst
         if not dst.is_file():
             enforce_state.append("%s 缺失" % rel_dst)
-        elif MANAGED_MARKER not in read_text(dst):
+        elif not has_marker(read_text(dst), MANAGED_MARKER):
             enforce_state.append("%s 已被项目接管（不自动更新）" % rel_dst)
     if enforce_state:
         add("执法包", "warn", "；".join(enforce_state))

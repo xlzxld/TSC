@@ -133,6 +133,17 @@ class OwnershipTests(unittest.TestCase):
             encoding="utf-8")
         self.assertEqual(tsc.contract_ownership(self.tmp), "foreign")
 
+    def test_prose_mention_is_not_managed(self):
+        """"提及"标记字符串 ≠ "声明"托管：判错会把外部规范当托管文件重建覆盖。"""
+        mentioned = AGENTS_SAMPLE.replace(
+            "<!-- tsc-managed-contract:v4 -->\n\n", "").replace(
+            "> 头注",
+            "> 头注：TSC 托管的契约带 `<!-- tsc-managed-contract:v4 -->` 标记；\n"
+            "> 本文件不用 tsc-managed-contract 托管。", 1)
+        self.assertIn(tsc.CONTRACT_MARKER, mentioned)  # 前置：正文里确实出现了该字符串
+        (self.tmp / "AGENTS.md").write_text(mentioned, encoding="utf-8")
+        self.assertEqual(tsc.contract_ownership(self.tmp), "foreign")
+
     def test_template_and_root_agents_carry_marker(self):
         for rel in ("templates/AGENTS.md", "AGENTS.md"):
             text = tsc.read_text(REPO / rel)
@@ -305,6 +316,26 @@ class EnforceActionsTests(unittest.TestCase):
         self.assertEqual((deploy, update), ([], []))
         self.assertEqual([(n, why) for n, why in skip],
                          [(".pre-commit-config.yaml", "内容已被项目改过")])
+
+    def test_takeover_edit_on_mention_line_is_respected(self):
+        """接管后改动"正文里含 tsc-managed 的说明行"也必须算项目已改过。
+
+        旧实现把"含该子串的行"一律当标记行丢弃，导致这类改动在正文比对里隐形
+        → 被误判成"旧版未改动的文件"而升级覆盖。
+        """
+        tsc.deploy_enforcement(self.tmp, REPO, AGENTS_SAMPLE, dry_run=False)
+        target = self.tmp / ".github" / "workflows" / "gate.yml"
+        lines = [ln for ln in tsc.read_text(target).splitlines()
+                 if not tsc.is_marker_line(ln, tsc.MANAGED_MARKER)]
+        # 项目接管：删掉标记行，并把残留说明行改成自己的口径（该行仍含 tsc-managed 字样）
+        lines = [ln.replace("# 检查器是 tsc-managed 落盘件",
+                            "# 检查器是 tsc-managed 落盘件，本项目已自建替代")
+                 for ln in lines]
+        tsc.write_text_atomic(target, "\n".join(lines) + "\n")
+        self.assertIn(tsc.MANAGED_MARKER, tsc.read_text(target))  # 前置：提及仍在
+        deploy, update, skip = self.actions()
+        self.assertEqual((deploy, [n for n, _ in update]), ([], []))
+        self.assertEqual([n for n, _ in skip], [".github/workflows/gate.yml"])
 
     def test_gate_yml_branch_follows_section2(self):
         tsc.deploy_enforcement(self.tmp, REPO, AGENTS_SAMPLE, dry_run=False)
