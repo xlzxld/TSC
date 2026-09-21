@@ -160,13 +160,24 @@ jobs:
                   proc.communicate(timeout=max(1, int(timeout_s)))
                   code = proc.returncode
               except subprocess.TimeoutExpired:
-                  try:
-                      if os.name == "nt":
-                          proc.kill()
-                      else:
+                  if os.name == "nt":
+                      # 只杀 shell 不够：孙进程会继续持有调用方的 stdout/stderr 管道，
+                      # 反而让上层一直等到它自然退出；taskkill /T 按父子关系杀整棵树。
+                      try:
+                          subprocess.run(
+                              ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                              timeout=15,
+                          )
+                      except (OSError, subprocess.SubprocessError):
+                          pass  # taskkill 缺失/超时——下面的单进程终止仍会执行
+                  else:
+                      try:
                           os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-                  except (ProcessLookupError, PermissionError, OSError):
-                      pass
+                      except (ProcessLookupError, PermissionError, OSError):
+                          pass
+                  if proc.poll() is None:
+                      proc.kill()
                   print(f"{label} 超过 {timeout_s}s 未结束，已终止整个进程组。门禁结论：超时（退出码 124）",
                         file=sys.stderr)
                   sys.exit(124)

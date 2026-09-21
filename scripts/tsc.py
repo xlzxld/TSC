@@ -54,6 +54,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -972,13 +973,50 @@ def _popen_kwargs():
 
 
 def _kill_process_group(proc):
-    try:
-        if os.name == "nt":
-            proc.kill()
-        else:
+    """终止整棵进程树（含 shell 的孙进程）。
+
+    只杀 shell 本身不够：孙进程会继续持有调用方的 stdout/stderr 管道，
+    让上层 capture_output 一直阻塞到孙进程自然退出（本机实测 60s+）。
+    """
+    if os.name == "nt":
+        # taskkill /T 按父子关系杀整棵树；不可用时再退回单进程终止。
+        try:
+            subprocess.run(
+                ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=15,
+            )
+        except (OSError, subprocess.SubprocessError):
+            pass  # taskkill 缺失/超时——下面的单进程终止仍会执行，超时结论不受影响
+    else:
+        try:
             os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-    except (ProcessLookupError, PermissionError, OSError):
-        pass  # 进程已自行退出或无权终止——不得掩盖超时结论
+        except (ProcessLookupError, PermissionError, OSError):
+            pass  # 进程已自行退出或无权终止——不得掩盖超时结论
+    if proc.poll() is None:
+        try:
+            proc.kill()
+        except OSError:
+            pass  # 刚被 taskkill 带走——同样不得掩盖超时结论
+
+
+def _reap_bounded(proc, grace_s):
+    """有界收割已终止的进程，返回是否已收到退出。
+
+    不能用第二次 communicate()：CPython 在 _communication_started 已置位时会
+    忽略传入的 timeout，本意"最多等 grace_s"会变成"一直等"。
+    """
+    endtime = time.monotonic() + grace_s
+    while True:
+        remaining = endtime - time.monotonic()
+        if remaining <= 0:
+            return False
+        try:
+            proc.wait(timeout=min(0.5, remaining))
+            return True
+        except subprocess.TimeoutExpired:
+            continue
 
 
 def run_gate_command(command, cwd, timeout_s):
@@ -991,10 +1029,7 @@ def run_gate_command(command, cwd, timeout_s):
         return proc.returncode, False
     except subprocess.TimeoutExpired:
         _kill_process_group(proc)
-        try:
-            proc.communicate(timeout=10)
-        except subprocess.TimeoutExpired:
-            pass
+        _reap_bounded(proc, 10)
         return EXIT_TIMEOUT, True
 
 
