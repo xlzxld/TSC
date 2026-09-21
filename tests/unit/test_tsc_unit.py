@@ -177,12 +177,14 @@ class SourceRecordTests(unittest.TestCase):
         (self.tmp / ".agents").mkdir()
 
     def test_write_and_read_json_record(self):
-        tsc.write_source_record(self.tmp, Path("/some/skill"), "4.0.0")
+        skill = Path("/some/skill")
+        tsc.write_source_record(self.tmp, skill, "4.0.0")
         record = tsc.read_source_record(self.tmp)
-        self.assertEqual(record["source"], "/some/skill")
+        # 断言的是"原样往返"，不绑定分隔符：Windows 上 str(Path("/some/skill")) 为 \some\skill
+        self.assertEqual(record["source"], str(skill))
         self.assertEqual(record["version"], "4.0.0")
         self.assertIn("installed_at", record)
-        self.assertTrue(tsc.source_record_current(self.tmp, Path("/some/skill"), "4.0.0"))
+        self.assertTrue(tsc.source_record_current(self.tmp, skill, "4.0.0"))
         self.assertFalse(tsc.source_record_current(self.tmp, Path("/other"), "4.0.0"))
 
     def test_legacy_plain_path_record_reads_but_never_current(self):
