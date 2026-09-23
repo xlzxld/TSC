@@ -797,6 +797,7 @@ def hook_main():
 
     fail-open 原则：stdin 不是 JSON、路径拿不到、工具自身故障，一律 0 放行
     （闸 2/3 兜底），钩子自身绝不能变成打断工作的故障源。"""
+    _init_stdout()
     try:
         if sys.stdin.isatty():
             return 0
@@ -931,6 +932,7 @@ def selftest() -> int:
 
 def main(argv=None) -> int:
     global USE_COLOR
+    _init_stdout()
     ap = argparse.ArgumentParser(
         prog="structure_guard",
         description="AI 代码结构完整性统一门禁：L0 编码 / L1 平衡 / L2 结构 / L3 形态 / L4 断言。",
@@ -1056,10 +1058,25 @@ def main(argv=None) -> int:
     return exit_code_for(results)
 
 
+def _init_stdout():
+    """把标准输出/错误强制成 UTF-8。
+
+    本检查器所有输出都是中文。Windows 上控制台编码不一定是能编码中文的代码页：
+    英文版 runner / 英文 Windows 是 **cp1252**，`print("未闭合")` 会直接抛
+    `UnicodeEncodeError: 'charmap' codec can't encode ...`，进程以 rc=1 崩掉——
+    看起来像"检查器坏了"，实际只是打印不出来。
+
+    必须在**每个入口**里调用，不能只放在 `if __name__ == "__main__"`：宿主 hook、
+    单元测试都是 in-process 调用 `main()`，那条路径压根不走 `__main__` 分支
+    （CI 在 Windows 上实测撞到过：3 个用例因此报错）。
+    """
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            pass
+
+
 if __name__ == "__main__":
-    try:
-        sys.stdout.reconfigure(encoding="utf-8")
-        sys.stderr.reconfigure(encoding="utf-8")
-    except Exception:
-        pass
+    _init_stdout()
     sys.exit(main())

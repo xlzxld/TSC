@@ -56,6 +56,17 @@ jobs:
           import os, re, shutil, signal, subprocess, sys
           from pathlib import Path
 
+          # 控制台编码不一定是能编码中文的代码页（英文版 Windows runner 是 cp1252，
+          # 且输出重定向到管道时取的是区域代码页而不是 UTF-8）。本壳的提示语全是中文，
+          # 不强制 UTF-8 就会在第一条 print 上抛 UnicodeEncodeError 崩掉、退出码变成 1——
+          # 与本地 tsc.py 的判定直接漂移（CI 在 windows 上实测撞到过）。
+          # 本地 tsc.py 早就有这层兜底，两套壳必须一致。
+          for _stream in (sys.stdout, sys.stderr):
+              try:
+                  _stream.reconfigure(encoding="utf-8", errors="replace")
+              except (AttributeError, ValueError):
+                  pass
+
           cfg = Path(".agents/project.py")
           if not cfg.is_file():
               print("找不到 .agents/project.py，门禁无法执行", file=sys.stderr)

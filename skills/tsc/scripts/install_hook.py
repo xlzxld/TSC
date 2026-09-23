@@ -161,7 +161,25 @@ def make_executable(path: str) -> None:
     os.chmod(path, mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
 
 
+def _init_stdout():
+    """把标准输出/错误强制成 UTF-8。
+
+    本脚本的输出全是中文。英文版 Windows 的控制台是 cp1252，`print("已安装...")`
+    会直接抛 `UnicodeEncodeError: 'charmap' codec can't encode ...`；而安装动作
+    其实**已经成功落盘**了，只是打印崩掉 → 调用方看到 rc=1，误判成"装失败"。
+
+    必须在 main() 里调用，不能只放在 `if __name__ == "__main__"`：单元测试等
+    in-process 调用走不到那条分支（CI 在 Windows 上实测撞到过）。
+    """
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            pass
+
+
 def main(argv=None) -> int:
+    _init_stdout()
     ap = argparse.ArgumentParser(description="给 git 仓库安装结构检查 pre-commit 钩子")
     ap.add_argument("--repo", default=".", help="仓库路径（默认当前目录）")
     ap.add_argument("--force", action="store_true", help="覆盖已有 pre-commit 钩子（先备份）")
@@ -235,8 +253,4 @@ def main(argv=None) -> int:
 
 
 if __name__ == "__main__":
-    try:
-        sys.stdout.reconfigure(encoding="utf-8")
-    except Exception:
-        pass
     sys.exit(main())

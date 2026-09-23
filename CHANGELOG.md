@@ -42,10 +42,25 @@
 | 2 | 与托管的 `gate.yml` **刻意分开**：不同文件名、不在 `ENFORCE_DEPLOY`、不带 `tsc-managed` 标记，`install`/`sync` 不碰它。母版"不部署自己的执法包"这条设计不变量保持不变 | 同上 |
 | 3 | 契约预算改为自动断言（原来只写在发版清单里手敲）：行数 < 80、规则数 ≤ 30，母版与实例一并受检 | `tests/unit/test_tsc_unit.py` |
 
+### CI 首跑就抓到一类真缺陷：非 UTF-8 控制台下中文输出把进程带崩
+
+`.github/workflows/ci.yml` 第一次跑就红了——macOS / ubuntu 全绿，**只有 Windows 红**，4 个失败同源：
+
+| 现象 | 根因 |
+|---|---|
+| `structure_guard.py --selftest`、`structure_guard.py <坏文件>`、`install_hook.py --repo` 三例 `UnicodeEncodeError: 'charmap' codec can't encode ...` | 这三个入口的 UTF-8 兜底只写在 `if __name__ == "__main__"` 里，**in-process 调用（宿主 hook、单元测试）走不到那条分支**；英文版 Windows 的控制台/管道编码是 cp1252，中文 `print` 直接抛异常、进程 rc=1——`install_hook` 的安装动作其实**已经成功落盘**，调用方却以为失败了 |
+| `test_gate_inline_shell_matches_local` 期望 3 实得 1 | CI 内联壳从头到尾没有强制 UTF-8，第一条中文提示就崩，退出码从"全未配置 = 假绿 3"变成 1——**两套壳的判定就此漂移**，而本地 `tsc.py` 一直有这层兜底 |
+
+修复：三个入口各自加 `_init_stdout()` 并在**入口函数开头**调用（不依赖 `__main__`）；CI 内联壳补上 `reconfigure(encoding="utf-8", errors="replace")`，与 `tsc.py` 对齐。
+
+回归测试刻意用 `PYTHONIOENCODING=cp1252` 把子进程压成非 UTF-8 控制台——本机是 cp936、能编码中文，**不这样强制就复现不出来**（这正是"为什么必须有 Windows CI"的实证）。
+
+> **顺带修正上一轮的判定**：报告 A-07 说"CI 内联 Python 未配置 UTF-8 编码"，我上轮判它"归错地方、价值低"，**判错了**。诊断方向是对的，只是后果被我低估——不是"乱码"，而是**进程崩掉、退出码改变**。已按报告原意修掉。
+
 ### 未采纳（登记备查，附理由）
 
-- **A-06 原判"母版无 CI 是漏做"**：措辞不准确——母版不部署自己的执法包是**刻意设计**（避免第二份真身，有测试锁定）。但"缺多平台回归线"这个代价是真的，已按上表补上。
-- **A-07（gate.yml 编码 / 超时收割）**：乱码现象属实但**归因错误**——`gate.yml` 只跑 `ubuntu-latest`，不存在 Windows 编码问题；乱码来自本地 `cmd.exe` 输出被 UTF-8 解码，属采集层。价值低，未改。
+- **A-06 原判"母版无 CI 是漏做"**：措辞不准确——母版不部署自己的执法包是**刻意设计**（避免第二份真身，有测试锁定）。但"缺多平台回归线"这个代价是真的，已按上表补上，并且**首跑就抓到了上面那类缺陷**。
+- **A-07**：已采纳（见上节）。原判定的错误登记在此，不删。
 - **A-10（taskkill 换 Windows Job Object）**：优化建议而非缺陷；现有实现已有单进程终止兜底，超时结论不受影响。
 - **A-11（`tsc.py` 拆模块）**：主观架构意见，与"零依赖单文件最好分发"的既有取舍冲突。
 
@@ -55,7 +70,8 @@
 - **契约标记代次仍为 `v4`**（`<!-- tsc-managed-contract:v4 -->`）。它是**契约格式代次**，不是发行号：契约条款与 §2 结构本轮没变，所以不动它——改了会让存量项目的 marker 认不出来，等于把所有下游项目误判成"外部 AGENTS.md"而拒绝同步。
 - 三处版本头（母版 `AGENTS.md`、`AUDIT-SPEC.md`、`BOOTSTRAP.md`）与执法包 README 同批更新；版本真源仍只有 `skills/tsc/VERSION` 一处。
 
-**本轮实测**：148 用例全绿（`python -m unittest discover -s tests -p "test_*.py"` rc=0）｜`tsc.py verify` rc=0（真实执行 LINT + TEST）｜`check-config` rc=0｜`doctor` rc=0（10 通过 / 0 警告 / 0 失败）｜结构门禁自检 35/35｜bracket_lint 自检 30/30｜`wc -l AGENTS.md` = 74 与母版一致。
+**本轮实测**：156 用例全绿（`python -m unittest discover -s tests -p "test_*.py"` rc=0）｜`tsc.py verify` rc=0（真实执行 LINT + TEST）｜`check-config` rc=0｜`doctor` rc=0（10 通过 / 0 警告 / 0 失败）｜结构门禁自检 35/35｜bracket_lint 自检 30/30｜`wc -l AGENTS.md` = 74 与母版零漂移。
+**多平台 CI 实测**：`ci.yml` 首跑 macOS + ubuntu 绿、Windows 红（见上节），修复后再跑 —— 结论以 Actions 页面为准。
 
 ## v4.0.0（2026-09-21）
 

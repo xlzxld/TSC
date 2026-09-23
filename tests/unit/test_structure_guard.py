@@ -282,5 +282,58 @@ class FindGitDirTests(unittest.TestCase):
         self.assertFalse(os.path.exists(os.path.join(common, "hooks", "pre-commit")))
 
 
+class ConsoleEncodingTests(unittest.TestCase):
+    """控制台不是 UTF-8 时，中文输出不能把进程带崩。
+
+    这是 CI（Windows runner）抓到的真实缺陷：这些脚本的输出全是中文，而英文版
+    Windows 的控制台/管道编码是 **cp1252**，`print("已安装...")` 直接抛
+    `UnicodeEncodeError: 'charmap' codec can't encode ...`，进程以 rc=1 退出——
+    安装动作其实已经成功落盘，调用方却以为失败了。
+
+    ⚠️ 本机是 cp936（能编码中文），本地怎么跑都不报；必须显式把子进程的
+    PYTHONIOENCODING 压成 cp1252 才复现得出来。这也是"加多平台 CI"的价值所在。
+    """
+
+    def _env(self):
+        env = dict(os.environ)
+        env["PYTHONIOENCODING"] = "cp1252"
+        return env
+
+    def _run(self, *args):
+        return subprocess.run([sys.executable] + list(args), capture_output=True,
+                              env=self._env())
+
+    def test_guard_selftest_survives_non_utf8_console(self):
+        rc = self._run(os.path.join(SCRIPTS, "structure_guard.py"), "--selftest")
+        self.assertEqual(rc.returncode, 0, rc.stderr.decode("utf-8", "replace")[-400:])
+
+    def test_guard_report_survives_non_utf8_console(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "bad.py")
+            with open(p, "w", encoding="utf-8") as fh:
+                fh.write("x = (1\n")
+            rc = self._run(os.path.join(SCRIPTS, "structure_guard.py"), p, "--color", "never")
+            self.assertEqual(rc.returncode, 1, rc.stderr.decode("utf-8", "replace")[-400:])
+
+    def test_hook_mode_survives_non_utf8_console(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "bad.py")
+            with open(p, "w", encoding="utf-8") as fh:
+                fh.write("x = (1\n")
+            rc = subprocess.run(
+                [sys.executable, os.path.join(SCRIPTS, "structure_guard.py"), "--from-hook"],
+                input=json.dumps({"tool_input": {"file_path": p}}),
+                capture_output=True, text=True, encoding="utf-8", errors="replace",
+                env=self._env())
+            self.assertEqual(rc.returncode, 2, rc.stderr[-400:])
+
+    def test_install_hook_survives_non_utf8_console(self):
+        with tempfile.TemporaryDirectory() as d:
+            repo = os.path.join(d, "repo")
+            os.makedirs(os.path.join(repo, ".git", "hooks"))
+            rc = self._run(os.path.join(SCRIPTS, "install_hook.py"), "--repo", repo)
+            self.assertEqual(rc.returncode, 0, rc.stderr.decode("utf-8", "replace")[-400:])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -420,6 +420,21 @@ class VerifyGateTests(E2EBase):
         code, out = run_script("check-config", "--project", str(self.tmp))
         self.assertEqual(code, 0, out)
 
+    def test_gate_inline_shell_survives_non_utf8_console(self):
+        """CI 在 Windows 上抓到的真实缺陷：内联壳没强制 UTF-8，cp1252 下中文 print 崩掉。
+
+        退出码因此从 3（全未配置 = 假绿）变成 1——两套壳的判定就此漂移，
+        而本地 tsc.py 一直有这层兜底。用 PYTHONIOENCODING=cp1252 强制复现。
+        """
+        code, _ = self.install()
+        self.assertEqual(code, 0)
+        env = dict(os.environ)
+        env["PYTHONIOENCODING"] = "cp1252"
+        proc = subprocess.run([sys.executable, "-c", gate_inline_source()],
+                              cwd=str(self.tmp), capture_output=True, env=env)
+        self.assertEqual(proc.returncode, 3,
+                         (proc.stdout + proc.stderr).decode("utf-8", "replace")[-600:])
+
     def test_gate_inline_shell_matches_local(self):
         """CI 内联壳与本地 tsc.py 同判定：假绿 3 / 不一致 1 / 全绿 0。"""
         code, _ = self.install()
