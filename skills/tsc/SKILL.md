@@ -15,24 +15,26 @@ metadata:
 
 **两层边界**（不要混）：
 
-- **本体（Skill/Plugin）**：本技能所在的插件目录。执行逻辑都在这里：`scripts/tsc.py`（唯一 CLI）、`scripts/structure_guard.py`、`scripts/bracket_lint.py`、`scripts/install_hook.py`；项目落盘模板在 `templates/`。下文用 `<插件根>` 指代本文件所在的插件目录（SKILL.md 的上两级）。
+- **本体（技能）**：本技能所在的自包含目录。执行逻辑都在这里：`scripts/tsc.py`（唯一 CLI）、`scripts/structure_guard.py`、`scripts/bracket_lint.py`、`scripts/install_hook.py`；项目落盘模板在 `templates/`。下文用 `<技能根>` 指代**本文件所在的目录**——技能目录自包含，拷它到任何平台的技能目录都能跑，不依赖平台私有清单。
 - **项目契约**：安装到具体项目里的 `AGENTS.md` + `.agents/project.py` + 执法包落盘件。项目里**绝不**复制执行逻辑。
 
 ## 一句话 → 动作（用户永远不需要敲命令）
 
 | 用户说 | 你做（底层命令仅供你执行，不要贴给用户当作业） |
 | --- | --- |
-| "TSC 状态" / "契约状态" | `python3 <插件根>/scripts/tsc.py status --project <项目根>`（加 `--json` 可拿机器可读版） |
+| "TSC 状态" / "契约状态" | `python3 <技能根>/scripts/tsc.py status --project <项目根>`（加 `--json` 可拿机器可读版） |
 | **"接入契约"** / "安装契约" | ① `install --dry-run` 报给用户看 → 确认后去掉 `--dry-run` 真跑 → ② 按 `references/BOOTSTRAP.md` 探测项目、填 §2 与 `.agents/project.py` → ③ `check-config` + `verify` + `doctor` |
 | **"更新契约"** / "同步契约" | `sync --project <项目根>`（先 `--dry-run` 预览；只从**当前已安装本体**取内容，不联网、不读项目 `.source`） |
-| **"更新 TSC"** / "升级 TSC 本体" | `tsc.py update`（git pull 本体；非 git 安装副本会提示走宿主插件市场更新）。只动本体，不碰项目 |
+| **"更新 TSC"** / "升级 TSC 本体" | `tsc.py update`（git pull 本体；非 git 安装副本会提示走宿主插件/技能管理更新）。只动本体，不碰项目 |
 | **"升级 TSC，并同步当前项目"** | 先 `update`，再 `sync --project <项目根>`，再 `check-config` + `verify`，汇报版本变化与门禁退出码 |
 | "TSC 体检" / "audit" | 只读审计：读 `references/AUDIT-SPEC.md` 按其规则执行，输出问题清单后**立即停**，严禁修改 |
 | "回滚契约" | `tsc.py rollback --project <项目根>`（撤销最近一次 install/sync 的写入） |
-| "结构体检" | `python3 <插件根>/scripts/structure_guard.py <文件/目录>`（只读） |
-| "装结构门禁" | `python3 <插件根>/scripts/install_hook.py --repo <项目根>`（装 pre-commit，装/卸幂等） |
+| "结构体检" | `python3 <技能根>/scripts/structure_guard.py <文件/目录>`（只读） |
+| "装结构门禁" | `python3 <技能根>/scripts/install_hook.py --repo <项目根>`（装 pre-commit，装/卸幂等） |
 
 `python3` 不存在时用 `python`（Windows 常见）。**汇报必须附实际命令与退出码**，不要说"应该没问题"。
+
+`--from-hook` 是给宿主的可选接入口（stdin 收工具调用的 JSON，退出码 2 = 拦住刚改的文件）：任何支持"工具调用后跑命令"的宿主都能接，本技能不预设也不分发任何平台的 hook 清单。
 
 ## 所有权边界（最优先的安全规则）
 

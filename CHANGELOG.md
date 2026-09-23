@@ -1,5 +1,52 @@
 # 变更记录 (CHANGELOG)
 
+## 未发版（main）
+
+**依据**：外部体检报告的逐条核实 + 用户要求"要通用技能，不要单一平台专属技能"。报告 11 条里 **6 条成立、3 条证据有误或定级虚高、2 条属主观建议**（逐条核实结论见文末）。
+
+### 破坏性变更：去掉平台专属外壳，技能目录改为自包含
+
+| # | 变更 | 文件 |
+|---|---|---|
+| 1 | **删除平台私有清单**：`.zcode-plugin/plugin.json`、`marketplace.json`、`hooks/hooks.json`。仓库不再绑定任何编辑器/插件市场，任何支持 Agent Skill 的宿主都能装 | 全仓 |
+| 2 | **技能目录自包含**：`scripts/`、`templates/`、`commands/`、`VERSION` 全部收进 `skills/tsc/`——拷这一个目录进宿主技能目录即可运行，运行期不依赖仓库其它部分；`upstream_root()` 语义随之变为"技能根" | `skills/tsc/**` |
+| 3 | **去平台化措辞**：`<插件根>` → `<技能根>`，清除平台专属字样与 `${平台_ROOT}` 类变量；`update` 的提示语改为"打开宿主平台的插件/技能管理页" | 全仓 |
+| 4 | **不再分发平台 hook 清单**：保留通用接入口 `structure_guard.py --from-hook`（stdin JSON，0 = 通过 / 2 = 拦截），由宿主自行配置；技能不预设任何平台的 hook 格式 | `scripts/structure_guard.py`、`SKILL.md`、`README.md` |
+| 5 | **平台中立回归测试**：技能目录自包含、全仓不得出现平台私有清单与专属变量。断言字面量刻意拆开拼接——否则测试会把自己扫成违规（与"提及 ≠ 声明"同一类坑） | `tests/unit/test_tsc_unit.py` |
+
+### 缺陷修复（报告核实成立，均附回归测试）
+
+| ID | 修复 | 实测取证 |
+|---|---|---|
+| A-02 | 测试夹具不再写死 `true` / `sleep`（POSIX 专属），统一改用当前解释器 | 修复前默认 PATH 下 **4 例失败**（`'true'/'sleep' 不是内部或外部命令`），修复后 148 例全绿 |
+| A-08 | JS 模板串插值内按 JS 词法逐层吃：先跳注释（`//`、`/* */`），再按主扫描同款判据识别正则字面量，并给引号串加"裸换行即中止"边界 | 修复前**完全合法**的 `s.replace(/'/g, "")` 被测出 3 处结构问题（rc=1）；修复后 rc=0。真 SyntaxError 仍由 L2（`node --check`）拦住 |
+| A-03 | `is_self_bootstrap()` 抽为唯一判据，`doctor` 与 `_enforce_actions` 共用；母版自检不再谎报 4 项"执法包缺失" | `doctor`：修复前 9 通过 / **1 警告（4 条假缺失）**，修复后 **10 通过 / 0 警告 / 0 失败** |
+| A-04 | `install_hook.find_git_dir()` 支持 `.git` 是文件：解析 `gitdir:` 指针，再过 `commondir` 落到**公共** git 目录——worktree 的钩子装在公共目录才生效，写进 `.git/worktrees/<名>/hooks` 是白写 | 新增 6 条测试：普通仓库 / worktree / submodule / 坏指针 / 目录不存在 / 端到端装-卸 |
+| A-05 | pre-commit 模板的结构门禁钩子由 `language: system` + `python3` 改为 `language: python` + `python` | 本机实测：Windows venv 只有 `python.exe` / `pythonw.exe`，**没有 `python3`**；`language: system` 的 entry 首令牌由系统 PATH 直接解析（pre-commit 官方文档）。⚠️ **未端到端跑通 pre-commit**（启动即写 `~/.cache`，环境权限受限），仅有静态回归锁定 |
+| A-01 | 门禁命令解释器回退：首令牌是 `python` / `python3` / `py` 但 PATH 解析不到时，换成当前解释器并明确告警；CI 内联壳同口径 | 新增 5 条单测；命令源（§2 与 project.py）仍可保持静态字符串，同源校验不受影响 |
+| A-09 | 契约母版与本仓库实例同批脱水：78 → **74 行**，行数余量 1 → 5 | `wc -l` 两文件均 74（门禁上限 79） |
+
+### 顺带修掉三处报告没提的缺陷
+
+| # | 问题 | 修复 |
+|---|---|---|
+| 1 | **母版自举回归（本轮改造引入、当场修掉）**：技能目录改成仓库子目录后，`is_self_bootstrap` 仍按"项目根 == 上游"判，导致母版仓库把自己当成待接入项目、把执法包铺进仓库根 | 判据改为"上游 == `<项目根>/skills/tsc`"；并按用户要求补测试防复发（含"宿主把技能装进项目内 `.claude/skills/` 时不算自举"这一反例） |
+| 2 | `doctor` 的"本体更新通道"只看 `<技能根>/.git`，母版布局（`.git` 在仓库根）被误报"非 git 安装"、`tsc update` 被谎称不可用 | 新增 `git_worktree_of()` 逐级上溯找 git 工作树；`doctor` 与 `update` 共用 |
+| 3 | e2e 夹具 `adapt_section2` 用 `re.sub` 拼替换串，Windows 路径的反斜杠被当成转义（`re.PatternError: bad escape \U`） | 改用函数替换，结果一律按字面量处理 |
+
+### 未采纳（登记备查，附理由）
+
+- **A-06（母版无 CI）**：事实存在，但**属刻意设计**——母版不铺执法包，避免出现第二份真身（有测试锁定）。报告称"漏做"不准确。代价真实：只在 Windows 暴露的问题拦不住。**建议另加独立命名的多平台工作流**（`ubuntu` + `windows` + `macos`，与托管的 `gate.yml` 分开），本轮未做，等用户决定。
+- **A-07（gate.yml 编码 / 超时收割）**：乱码现象属实但**归因错误**——`gate.yml` 只跑 `ubuntu-latest`，不存在 Windows 编码问题；乱码来自本地 `cmd.exe` 输出被 UTF-8 解码，属采集层。价值低，未改。
+- **A-10（taskkill 换 Windows Job Object）**：优化建议而非缺陷；现有实现已有单进程终止兜底，超时结论不受影响。
+- **A-11（`tsc.py` 拆模块）**：主观架构意见，与"零依赖单文件最好分发"的既有取舍冲突。
+
+### 版本说明
+
+本轮改动落在 `main`（走 PR），**未 bump `skills/tsc/VERSION`**：只改内容、不发版。存量项目跑一次 `sync` 即按内容漂移拿到新模板，`doctor` 不会因版本号报警。要发版时由维护者 bump 版本并给本节补上版本号。
+
+**本轮实测**：148 用例全绿（`python -m unittest discover -s tests -p "test_*.py"` rc=0）｜`tsc.py verify` rc=0（真实执行 LINT + TEST）｜`check-config` rc=0｜`doctor` rc=0（10 通过 / 0 警告 / 0 失败）｜结构门禁自检 35/35｜bracket_lint 自检 30/30｜`wc -l AGENTS.md` = 74 与母版一致。
+
 ## v4.0.0（2026-09-21）
 
 **依据**：《TSC 全方位评审与改造规格 v1.0》。目标不是继续堆规则，而是把 TSC 收敛成真正可安装、可发现、可使用、可升级、可回滚的 Agent Skill / ZCode Plugin。

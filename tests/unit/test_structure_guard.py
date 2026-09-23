@@ -12,7 +12,7 @@ import tempfile
 import unittest
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-SCRIPTS = os.path.join(ROOT, "scripts")
+SCRIPTS = os.path.join(ROOT, "skills", "tsc", "scripts")
 for p in (SCRIPTS,):
     if p not in sys.path:
         sys.path.insert(0, p)
@@ -135,7 +135,8 @@ class CliTests(unittest.TestCase):
             self.assertEqual(sg.main([p, "--color", "never", "--quiet"]), 0)
 
     def test_guard_scripts_themselves_are_clean(self):
-        for rel in ("scripts/bracket_lint.py", "scripts/install_hook.py", "scripts/structure_guard.py"):
+        for rel in ("skills/tsc/scripts/bracket_lint.py", "skills/tsc/scripts/install_hook.py",
+                    "skills/tsc/scripts/structure_guard.py"):
             self.assertEqual(sg.main([os.path.join(ROOT, rel), "--quiet",
                                       "--color", "never"]), 0, rel)
 
@@ -188,12 +189,12 @@ class ExpandPathsTests(unittest.TestCase):
 
 class InstallHookContractTests(unittest.TestCase):
     def test_hook_targets_guard_with_staged_mode(self):
-        text = src_of("scripts/install_hook.py")
+        text = src_of("skills/tsc/scripts/install_hook.py")
         self.assertIn("structure_guard.py", text)
         self.assertIn("--staged", text)
 
     def test_hook_blocks_only_on_exit_1(self):
-        text = src_of("scripts/install_hook.py")
+        text = src_of("skills/tsc/scripts/install_hook.py")
         self.assertIn('-eq 1', text)
         self.assertIn("本次不拦截", text)
 
@@ -211,6 +212,74 @@ class InstallHookContractTests(unittest.TestCase):
         combined = base + ih.build_block()
         stripped = ih.strip_existing(combined)
         self.assertEqual(stripped, base)
+
+
+class FindGitDirTests(unittest.TestCase):
+    """A-04：worktree / submodule 的 .git 是**文件**，钩子必须落到真正生效的 git 目录。
+
+    修复前 `if os.path.isfile(cand): return None` 直接把这两类仓库判成"找不到 git 仓库"。
+    worktree 还有个更隐蔽的点：钩子装在**公共**目录（主仓库 .git/hooks），
+    写进 .git/worktrees/<名字>/hooks 是白写——git 用 commondir 文件记录这层跳转。
+    """
+
+    def setUp(self):
+        import shutil
+        self.tmp = tempfile.mkdtemp(prefix="tsc-gitdir-")
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+
+    def _write(self, path, text):
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(text)
+
+    def _make_worktree(self):
+        """返回 (worktree 路径, 公共 .git 目录) 的伪布局。"""
+        common = os.path.join(self.tmp, "main", ".git")
+        wt_git = os.path.join(common, "worktrees", "feat")
+        self._write(os.path.join(wt_git, "commondir"), "../..\n")
+        wt = os.path.join(self.tmp, "wt")
+        self._write(os.path.join(wt, ".git"), "gitdir: %s\n" % wt_git.replace("\\", "/"))
+        return wt, common
+
+    def test_plain_repo_returns_dot_git(self):
+        import install_hook as ih
+        repo = os.path.join(self.tmp, "repo")
+        os.makedirs(os.path.join(repo, ".git", "hooks"))
+        self.assertEqual(ih.find_git_dir(repo), os.path.join(repo, ".git"))
+
+    def test_worktree_resolves_to_common_dir(self):
+        import install_hook as ih
+        wt, common = self._make_worktree()
+        self.assertEqual(ih.find_git_dir(wt), os.path.normpath(common))
+
+    def test_submodule_resolves_to_modules_dir(self):
+        # submodule 的 .git 也是文件，但 Git 目录在 .git/modules/<name>，且没有 commondir
+        import install_hook as ih
+        modules = os.path.join(self.tmp, "super", ".git", "modules", "sub")
+        os.makedirs(modules)
+        sub = os.path.join(self.tmp, "super", "sub")
+        self._write(os.path.join(sub, ".git"), "gitdir: %s\n" % modules.replace("\\", "/"))
+        self.assertEqual(ih.find_git_dir(sub), os.path.normpath(modules))
+
+    def test_broken_gitdir_pointer_is_none(self):
+        import install_hook as ih
+        repo = os.path.join(self.tmp, "broken")
+        self._write(os.path.join(repo, ".git"), "gitdir: /nonexistent/nowhere\n")
+        self.assertIsNone(ih.find_git_dir(repo))
+
+    def test_missing_dir_is_none(self):
+        import install_hook as ih
+        self.assertIsNone(ih.find_git_dir(os.path.join(self.tmp, "nope")))
+
+    def test_hook_lands_in_common_dir_for_worktree(self):
+        """端到端：在 worktree 上装钩子，文件出现在公共 .git/hooks/pre-commit。"""
+        import install_hook as ih
+        wt, common = self._make_worktree()
+        self.assertEqual(ih.main(["--repo", wt]), 0)
+        self.assertTrue(os.path.isfile(os.path.join(common, "hooks", "pre-commit")))
+        # 幂等卸载
+        self.assertEqual(ih.main(["--repo", wt, "--uninstall"]), 0)
+        self.assertFalse(os.path.exists(os.path.join(common, "hooks", "pre-commit")))
 
 
 if __name__ == "__main__":

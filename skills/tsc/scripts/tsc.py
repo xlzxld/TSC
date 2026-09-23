@@ -1,28 +1,28 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""tsc —— 契约分发与门禁的唯一核心脚本（常驻插件 scripts/ 目录）。
+"""tsc —— 契约分发与门禁的唯一核心脚本（常驻技能 scripts/ 目录）。
 
-用法（脚本留在插件目录，用 --project 指定目标项目）：
-    python3 <插件根>/scripts/tsc.py status       --project <项目根>
-    python3 <插件根>/scripts/tsc.py install     [--force] --project <项目根>
-    python3 <插件根>/scripts/tsc.py sync         --project <项目根>
-    python3 <插件根>/scripts/tsc.py update      [--timeout <秒>]
-    python3 <插件根>/scripts/tsc.py verify      [--timeout <秒>] --project <项目根>
-    python3 <插件根>/scripts/tsc.py check-config --project <项目根>
-    python3 <插件根>/scripts/tsc.py doctor      [--json] --project <项目根>
-    python3 <插件根>/scripts/tsc.py rollback     --project <项目根>
+用法（脚本留在技能目录，用 --project 指定目标项目）：
+    python3 <技能根>/scripts/tsc.py status       --project <项目根>
+    python3 <技能根>/scripts/tsc.py install     [--force] --project <项目根>
+    python3 <技能根>/scripts/tsc.py sync         --project <项目根>
+    python3 <技能根>/scripts/tsc.py update      [--timeout <秒>]
+    python3 <技能根>/scripts/tsc.py verify      [--timeout <秒>] --project <项目根>
+    python3 <技能根>/scripts/tsc.py check-config --project <项目根>
+    python3 <技能根>/scripts/tsc.py doctor      [--json] --project <项目根>
+    python3 <技能根>/scripts/tsc.py rollback     --project <项目根>
 
     `--project` 省略时取当前工作目录，因此"cd 到项目里再跑"也成立。
 
 命令边界（两类升级严格分开，不要混为一谈）：
-    update   只更新 TSC 技能/插件本体（git pull；非 git 安装副本走宿主更新机制）
+    update   只更新 TSC 技能本体（git pull；非 git 安装副本走宿主更新机制）
     sync     只更新当前项目契约（来源恒为"当前已安装的本体"，绝不读项目 .source）
     install  首次接入；目标项目已有外部 AGENTS.md 时必须 --force 显式接管
     doctor   只读诊断，给出 ready / not-ready 结论
     rollback 恢复上一次 install/sync 写盘之前的项目契约状态
 
 通用参数：
-    --source <路径>  显式上游（本地插件/技能目录），默认=本脚本所在插件根
+    --source <路径>  显式上游（本地技能目录），默认=本脚本所在技能根
     --from <路径>    同 --source（旧名兼容）
     --project <路径> 目标项目根（默认当前目录）
     --dry-run        只报告将发生的变化，不写任何文件
@@ -50,6 +50,7 @@
 import argparse
 import json
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -71,7 +72,7 @@ SOURCE_FILE = ".source"
 PROJECT_FILE = "project.py"
 SECTION2_HEADING = "## 2."
 
-# 插件/技能布局：本脚本在 <插件根>/scripts/ 下，上游根即其上一级。
+# 插件/技能布局：本脚本在 <技能根>/scripts/ 下，上游根即其上一级。
 SCRIPT_SUBDIR = "scripts"
 TEMPLATE_AGENTS = "templates/AGENTS.md"
 TEMPLATE_PROJECT_EXAMPLE = "templates/project.example.py"
@@ -132,7 +133,7 @@ GATE_TIMEOUTS_KEY = "GATE_TIMEOUTS"
 PLACEHOLDER = "[自动填充]"
 
 SKILL_ONLY_LEFTOVERS = [
-    # 旧版本曾复制进项目的执行逻辑；现已统一由插件目录提供，只提示、不删除。
+    # 旧版本曾复制进项目的执行逻辑；现已统一由技能目录提供，只提示、不删除。
     "tsc.py",
     "AUDIT-SPEC.md",
     "BOOTSTRAP.md",
@@ -280,7 +281,7 @@ def compose_agents_md(upstream_text, project_text):
 
 
 # --------------------------------------------------------------------------- #
-# 上游定位：显式 --source > 当前已安装本体（本脚本所在插件根）。
+# 上游定位：显式 --source > 当前已安装本体（本脚本所在技能根）。
 # 项目的 .agents/.source 只是 provenance（来源记录），**绝不参与上游解析**——
 # 否则旧安装源会压过当前 Skill，"更新后裸 sync"仍同步旧版本（v3.x P1-01）。
 # --------------------------------------------------------------------------- #
@@ -495,9 +496,9 @@ def detect_legacy(proj_root):
 
 
 def detect_skill_only_leftovers(proj_root):
-    """项目 .agents/ 里残留的执行逻辑（现由插件目录统一提供）。只用于提示，不删除。
+    """项目 .agents/ 里残留的执行逻辑（现由技能目录统一提供）。只用于提示，不删除。
 
-    扫描目标本身就是上游/插件目录时返回空——那里的逻辑是正本，不是冗余。
+    扫描目标本身就是上游/技能目录时返回空——那里的逻辑是正本，不是冗余。
     """
     proj_root = Path(proj_root)
     try:
@@ -545,7 +546,7 @@ def collect_payload(upstream):
     """需要分发到项目的文件：键为相对项目根的路径，值为上游源文件。
 
     只分发"必须躺在项目里"的东西：版本号一个。执行逻辑（tsc.py / AUDIT-SPEC /
-    BOOTSTRAP / verify.* / test / 执法包模板原件）一律留在插件目录，不往项目里复制。
+    BOOTSTRAP / verify.* / test / 执法包模板原件）一律留在技能目录，不往项目里复制。
     注意：**不包含 AGENTS.md**——它需要与项目现有 §2 合成后单独写。
     """
     return [(Path(AGENTS_DIR) / VERSION_FILE, upstream / VERSION_FILE)]
@@ -599,6 +600,44 @@ def section2_value(block, row_prefix):
     return None
 
 
+def is_self_bootstrap(proj_root, upstream):
+    """目标项目就是上游本体的宿主仓库（母版/技能仓库自举）。
+
+    两种安装形态都表示"这个项目就是 TSC 自己的仓库"：
+    - 上游 == 项目根                 → v4.0.0 及更早的"技能就在仓库根"布局；
+    - 上游 == <项目根>/skills/tsc/   → 自包含技能布局（技能目录是仓库的子目录）。
+
+    自举时不往根目录铺生效件——模板原件已在技能 templates/ 下，再铺一份就是重复真身。
+    因此凡是"执法包是否齐备"的判定都必须先过这一关：`_enforce_actions` 靠它跳过落盘，
+    `cmd_doctor` 靠它跳过缺失告警。两边口径必须一致，否则母版自检永远误报（A-03）。
+
+    注意判据不能用"上游在项目之内"：宿主把技能装进项目里的 `.claude/skills/` 时也满足
+    "之内"，那属于正常的待接入项目，必须照常铺执法包。
+    """
+    if upstream is None:
+        return False
+    try:
+        proj = Path(proj_root).resolve()
+        up = Path(upstream).resolve()
+    except OSError:
+        return False
+    return proj == up or up == (proj / "skills" / "tsc")
+
+
+def git_worktree_of(path):
+    """path 所属 git 仓库的工作树根；不在 git 工作树里则 None。
+
+    两种安装形态都要认：技能目录自身是 git 副本（宿主技能目录里 clone 的），
+    或技能目录是某个 git 仓库的子目录（<仓库根>/skills/tsc/）。只查
+    `<技能根>/.git` 会把后者误判成"非 git 安装"，进而谎报 `tsc update` 不可用。
+    """
+    d = Path(path).resolve()
+    for cand in (d, *d.parents):
+        if (cand / ".git").exists():
+            return cand
+    return None
+
+
 def _enforce_actions(proj_root, upstream, merged_agents_text):
     """算出执法包落盘动作，不写任何文件（判定单源，供部署与早退检查共用）。
 
@@ -612,12 +651,9 @@ def _enforce_actions(proj_root, upstream, merged_agents_text):
     返回 (新部署, 已更新, 跳过)。
     """
     proj_root = Path(proj_root)
-    try:
-        if proj_root.resolve() == Path(upstream).resolve():
-            # 母版/插件目录自举：模板原件已在 templates/，不往自己根目录铺生效件
-            return [], [], []
-    except OSError:
-        pass
+    if is_self_bootstrap(proj_root, upstream):
+        # 母版/技能目录自举：模板原件已在 templates/，不往自己根目录铺生效件
+        return [], [], []
     node = is_node_project(proj_root)
     deploy, update, skip = [], [], []
 
@@ -942,7 +978,7 @@ def do_apply(proj_root, upstream, dry_run, force):
     stale = detect_skill_only_leftovers(proj_root)
     if stale:
         say("")
-        say("提示：以下文件是旧版复制进来的执行逻辑，现已统一由插件目录提供，")
+        say("提示：以下文件是旧版复制进来的执行逻辑，现已统一由技能目录提供，")
         say("      留在项目里只是冗余（不影响功能）。确认后可自行删除：")
         for name in stale:
             say("  .agents/%s" % name)
@@ -996,6 +1032,26 @@ def _popen_kwargs():
     return {"start_new_session": True}
 
 
+# 门禁命令的首令牌可能是 python / python3 / py。命令源（AGENTS.md §2 与
+# .agents/project.py）必须是两处一致的静态字符串，写不出 sys.executable；而解释器
+# 名字各平台不齐——Windows 常见只有 python，部分 Linux/macOS 只有 python3。写死
+# 任何一个都会在另一平台上变成"命令找不到"，于是门禁在最需要它的时候崩掉。
+# 这里做一次回退：PATH 里解析得到就不动，解析不到才换成当前解释器（并明确告警）。
+_INTERPRETER_HEAD = re.compile(
+    r'^(?P<indent>\s*)(?P<quote>"?)(?P<token>py|python[0-9.]*)(?P=quote)(?=\s|$)'
+)
+
+
+def retarget_interpreter(command):
+    """首令牌是解释器且 PATH 里解析不到时，换成当前解释器。返回 (命令, 是否改过)。"""
+    if not command:
+        return command, False
+    m = _INTERPRETER_HEAD.match(command)
+    if m is None or shutil.which(m.group("token")):
+        return command, False
+    return '%s"%s"%s' % (m.group("indent"), sys.executable, command[m.end():]), True
+
+
 def _kill_process_group(proc):
     """终止整棵进程树（含 shell 的孙进程）。
 
@@ -1045,6 +1101,9 @@ def _reap_bounded(proc, grace_s):
 
 def run_gate_command(command, cwd, timeout_s):
     """带超时地执行一条门禁命令。返回 (退出码, 是否超时)。"""
+    command, retargeted = retarget_interpreter(command)
+    if retargeted:
+        warn("该命令写的解释器在 PATH 里找不到，已改用当前解释器执行：%s" % command)
     proc = subprocess.Popen(
         command, shell=True, cwd=str(cwd), **_popen_kwargs()
     )
@@ -1164,14 +1223,14 @@ def cmd_check_config(proj_root):
 
 
 # --------------------------------------------------------------------------- #
-# update：只更新技能/插件本体（与项目 sync 严格分开）
+# update：只更新技能本体（与项目 sync 严格分开）
 # --------------------------------------------------------------------------- #
 def cmd_update(timeout_s):
     root = upstream_root()
     old_ver = upstream_version(root) or "未知"
-    if not (root / ".git").exists():
-        warn("当前安装副本不含 .git（通常由宿主插件市场或压缩包安装，本脚本无从拉取）。")
-        warn("本体更新请走宿主机制：ZCode → 设置 → 插件管理 → tsc → 更新；")
+    if git_worktree_of(root) is None:
+        warn("当前安装副本不含 .git（不在任何 git 工作树里）——通常由宿主插件市场或压缩包安装，本脚本无从拉取。")
+        warn("本体更新请走宿主机制：打开宿主平台的插件/技能管理页，更新 tsc；")
         warn("或用 git clone / 市场重装修复后重试。项目契约不受影响，仍可 sync/verify。")
         return EXIT_STATE
     say("本体目录：%s（当前 v%s）" % (root, old_ver))
@@ -1314,7 +1373,7 @@ def cmd_doctor(proj_root, upstream, as_json=False):
 
     up_ver = None
     if upstream is None:
-        add("上游来源", "fail", "无法定位（本脚本应位于 <插件根>/scripts/ 下）")
+        add("上游来源", "fail", "无法定位（本脚本应位于 <技能根>/scripts/ 下）")
     else:
         missing = validate_upstream(upstream)
         up_ver = upstream_version(upstream)
@@ -1322,10 +1381,11 @@ def cmd_doctor(proj_root, upstream, as_json=False):
             add("上游来源", "fail", "%s 不完整，缺少：%s" % (upstream, "、".join(missing)))
         else:
             add("上游来源", "ok", "%s（v%s）" % (upstream, up_ver))
-    if (upstream_root() / ".git").exists():
-        add("本体更新通道", "ok", "git 安装（tsc update 可直接 pull）")
+    host_repo = git_worktree_of(upstream_root())
+    if host_repo is not None:
+        add("本体更新通道", "ok", "git 安装（%s；tsc update 可直接 pull）" % host_repo)
     else:
-        add("本体更新通道", "warn", "非 git 安装：本体更新走宿主插件市场（tsc update 不适用）")
+        add("本体更新通道", "warn", "非 git 安装：本体更新走宿主插件/技能管理（tsc update 不适用）")
 
     installed = (proj_root / AGENTS_MD).is_file()
     ownership = contract_ownership(proj_root)
@@ -1377,19 +1437,22 @@ def cmd_doctor(proj_root, upstream, as_json=False):
     else:
         add("项目类型", "ok", "非 Node 项目：不部署 commitlint，零 npm 依赖")
 
-    enforce_state = []
-    for rel_src, rel_dst in ENFORCE_DEPLOY.items():
-        if rel_src in NODE_ONLY_ENFORCE and not node:
-            continue
-        dst = proj_root / rel_dst
-        if not dst.is_file():
-            enforce_state.append("%s 缺失" % rel_dst)
-        elif not has_marker(read_text(dst), MANAGED_MARKER):
-            enforce_state.append("%s 已被项目接管（不自动更新）" % rel_dst)
-    if enforce_state:
-        add("执法包", "warn", "；".join(enforce_state))
+    if is_self_bootstrap(proj_root, upstream):
+        add("执法包", "ok", "上游本体自身：按设计不铺生效件（模板原件在技能 templates/ 下）")
     else:
-        add("执法包", "ok", "齐备且托管")
+        enforce_state = []
+        for rel_src, rel_dst in ENFORCE_DEPLOY.items():
+            if rel_src in NODE_ONLY_ENFORCE and not node:
+                continue
+            dst = proj_root / rel_dst
+            if not dst.is_file():
+                enforce_state.append("%s 缺失" % rel_dst)
+            elif not has_marker(read_text(dst), MANAGED_MARKER):
+                enforce_state.append("%s 已被项目接管（不自动更新）" % rel_dst)
+        if enforce_state:
+            add("执法包", "warn", "；".join(enforce_state))
+        else:
+            add("执法包", "ok", "齐备且托管")
 
     prov = read_source_record(proj_root)
     if prov:
@@ -1446,7 +1509,7 @@ def build_parser():
         choices=[None, "status", "install", "sync", "update", "verify", "check-config", "doctor", "rollback"],
         help="要执行的子命令",
     )
-    parser.add_argument("--source", dest="source", default=None, help="显式上游（本地插件目录）")
+    parser.add_argument("--source", dest="source", default=None, help="显式上游（本地技能目录）")
     parser.add_argument("--from", dest="source", default=None, help=argparse.SUPPRESS)  # 旧名兼容
     parser.add_argument("--project", default=None, help="目标项目根（默认当前目录）")
     parser.add_argument("--dry-run", action="store_true", help="只报告，不写文件")

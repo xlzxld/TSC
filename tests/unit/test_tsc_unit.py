@@ -9,7 +9,7 @@
 - AGENTS.md 所有权：none / managed / legacy / foreign（P1-03）
 - 执法包归属三态 + Node/JS 探测（Python-only 项目不部署 commitlint，P1-04）
 - 门禁命令超时：杀进程组、返回 124（P1-05）
-- 插件结构：plugin.json / hooks.json / SKILL.md frontmatter / marketplace.json（P1-02、P2-01）
+- 技能打包：目录自包含 + 平台中立 + SKILL.md frontmatter（P1-02 通用化、P2-01）
 - 模板约束：所有权标记、gitleaks 钉 SHA（P2-06）、gate.yml commitlint 条件、内外 AGENTS.md 零漂移
 """
 
@@ -21,7 +21,13 @@ import unittest
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(REPO / "scripts"))
+SKILL = REPO / "skills" / "tsc"
+sys.path.insert(0, str(SKILL / "scripts"))
+
+# 跨平台门禁夹具：绝不写 `true` / `sleep` 这类 POSIX 专属命令——
+# Windows 上根本没有它们，会让超时相关的用例在 Windows 上必然失败（A-02）。
+QUICK_CMD = '"%s" -c "pass"' % sys.executable
+SLOW_CMD = '"%s" -c "import time;time.sleep(60)"' % sys.executable
 
 import tsc  # noqa: E402
 
@@ -145,13 +151,13 @@ class OwnershipTests(unittest.TestCase):
         self.assertEqual(tsc.contract_ownership(self.tmp), "foreign")
 
     def test_template_and_root_agents_carry_marker(self):
-        for rel in ("templates/AGENTS.md", "AGENTS.md"):
+        for rel in ("skills/tsc/templates/AGENTS.md", "AGENTS.md"):
             text = tsc.read_text(REPO / rel)
             self.assertIn(tsc.CONTRACT_MARKER_LINE, text, rel)
 
     def test_root_agents_is_compose_of_template(self):
         """本仓库根 AGENTS.md 必须与模板零漂移（§2 取值除外）——防止两份母版分叉。"""
-        template = tsc.read_text(REPO / "templates/AGENTS.md")
+        template = tsc.read_text(SKILL / "templates/AGENTS.md")
         root = tsc.read_text(REPO / "AGENTS.md")
         self.assertEqual(tsc.compose_agents_md(template, root), root)
 
@@ -169,10 +175,10 @@ class UpstreamResolutionTests(unittest.TestCase):
 
     def test_default_is_installed_plugin_root(self):
         self.assertEqual(tsc.find_upstream(None), tsc.upstream_root())
-        self.assertEqual(tsc.upstream_root(), REPO)
+        self.assertEqual(tsc.upstream_root(), SKILL)
 
     def test_validate_upstream_new_layout(self):
-        self.assertEqual(tsc.validate_upstream(REPO), [])
+        self.assertEqual(tsc.validate_upstream(SKILL), [])
         missing = tsc.validate_upstream(self.tmp)
         self.assertIn(tsc.VERSION_FILE, missing)
         self.assertIn(tsc.TEMPLATE_AGENTS, missing)
@@ -238,7 +244,7 @@ class NodeDetectionTests(unittest.TestCase):
         self.assertEqual(tsc.strip_node_regions(text), text)
 
     def test_template_precommit_has_node_region(self):
-        text = tsc.read_text(REPO / "templates/enforcement/.pre-commit-config.yaml")
+        text = tsc.read_text(SKILL / "templates/enforcement/.pre-commit-config.yaml")
         self.assertIn(tsc.NODE_REGION_BEGIN, text)
         self.assertIn(tsc.NODE_REGION_END, text)
         self.assertIn("@commitlint/cli", text)  # node 区块里才有 commitlint
@@ -257,7 +263,7 @@ class EnforceActionsTests(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.tmp, True)
 
     def actions(self, agents_text=AGENTS_SAMPLE):
-        return tsc._enforce_actions(self.tmp, REPO, agents_text)
+        return tsc._enforce_actions(self.tmp, SKILL, agents_text)
 
     def test_fresh_deploy_python_project(self):
         # 非 Node 项目：4 份（gate.yml / pre-commit / structure_guard / bracket_lint），无 commitlint
@@ -276,12 +282,12 @@ class EnforceActionsTests(unittest.TestCase):
         self.assertIn("commitlint.config.js", [n for n, _ in deploy])
 
     def test_structure_guard_lands_with_managed_marker(self):
-        tsc.deploy_enforcement(self.tmp, REPO, AGENTS_SAMPLE, dry_run=False)
+        tsc.deploy_enforcement(self.tmp, SKILL, AGENTS_SAMPLE, dry_run=False)
         for rel in (".agents/structure_guard.py", ".agents/bracket_lint.py"):
             self.assertIn(tsc.MANAGED_MARKER, tsc.read_text(self.tmp / rel), rel)
 
     def test_python_project_precommit_has_no_npx(self):
-        tsc.deploy_enforcement(self.tmp, REPO, AGENTS_SAMPLE, dry_run=False)
+        tsc.deploy_enforcement(self.tmp, SKILL, AGENTS_SAMPLE, dry_run=False)
         text = tsc.read_text(self.tmp / ".pre-commit-config.yaml")
         self.assertNotIn("npx", text)
         self.assertNotIn("@commitlint", text)
@@ -289,17 +295,17 @@ class EnforceActionsTests(unittest.TestCase):
 
     def test_node_project_precommit_keeps_npx(self):
         (self.tmp / "package.json").write_text("{}", encoding="utf-8")
-        tsc.deploy_enforcement(self.tmp, REPO, AGENTS_SAMPLE, dry_run=False)
+        tsc.deploy_enforcement(self.tmp, SKILL, AGENTS_SAMPLE, dry_run=False)
         text = tsc.read_text(self.tmp / ".pre-commit-config.yaml")
         self.assertIn("npx", text)
 
     def test_managed_same_content_is_noop(self):
-        tsc.deploy_enforcement(self.tmp, REPO, AGENTS_SAMPLE, dry_run=False)
+        tsc.deploy_enforcement(self.tmp, SKILL, AGENTS_SAMPLE, dry_run=False)
         deploy, update, skip = self.actions()
         self.assertEqual((deploy, update, skip), ([], [], []))
 
     def test_managed_drift_gets_update(self):
-        tsc.deploy_enforcement(self.tmp, REPO, AGENTS_SAMPLE, dry_run=False)
+        tsc.deploy_enforcement(self.tmp, SKILL, AGENTS_SAMPLE, dry_run=False)
         # 项目后来才变成 Node 项目：sync 应补部署 commitlint
         (self.tmp / "package.json").write_text("{}", encoding="utf-8")
         deploy, update, skip = self.actions()
@@ -307,7 +313,7 @@ class EnforceActionsTests(unittest.TestCase):
         self.assertEqual(skip, [])
 
     def test_user_takeover_is_skipped(self):
-        tsc.deploy_enforcement(self.tmp, REPO, AGENTS_SAMPLE, dry_run=False)
+        tsc.deploy_enforcement(self.tmp, SKILL, AGENTS_SAMPLE, dry_run=False)
         target = self.tmp / ".pre-commit-config.yaml"
         lines = [ln for ln in tsc.read_text(target).splitlines() if tsc.MANAGED_MARKER not in ln]
         lines.append("# 项目自己改过的钩子配置")
@@ -323,7 +329,7 @@ class EnforceActionsTests(unittest.TestCase):
         旧实现把"含该子串的行"一律当标记行丢弃，导致这类改动在正文比对里隐形
         → 被误判成"旧版未改动的文件"而升级覆盖。
         """
-        tsc.deploy_enforcement(self.tmp, REPO, AGENTS_SAMPLE, dry_run=False)
+        tsc.deploy_enforcement(self.tmp, SKILL, AGENTS_SAMPLE, dry_run=False)
         target = self.tmp / ".github" / "workflows" / "gate.yml"
         lines = [ln for ln in tsc.read_text(target).splitlines()
                  if not tsc.is_marker_line(ln, tsc.MANAGED_MARKER)]
@@ -338,27 +344,35 @@ class EnforceActionsTests(unittest.TestCase):
         self.assertEqual([n for n, _ in skip], [".github/workflows/gate.yml"])
 
     def test_gate_yml_branch_follows_section2(self):
-        tsc.deploy_enforcement(self.tmp, REPO, AGENTS_SAMPLE, dry_run=False)
+        tsc.deploy_enforcement(self.tmp, SKILL, AGENTS_SAMPLE, dry_run=False)
         gate = tsc.read_text(self.tmp / ".github" / "workflows" / "gate.yml")
         self.assertIn("branches: [master]", gate)
         self.assertNotIn("branches: [main]", gate)
 
     def test_gate_yml_keeps_default_branch_when_trunk_is_none(self):
         sample = AGENTS_SAMPLE.replace("| 主干分支 | master |", "| 主干分支 | 无 |")
-        tsc.deploy_enforcement(self.tmp, REPO, sample, dry_run=False)
+        tsc.deploy_enforcement(self.tmp, SKILL, sample, dry_run=False)
         gate = tsc.read_text(self.tmp / ".github" / "workflows" / "gate.yml")
         self.assertIn("branches: [main]", gate)
         self.assertNotIn("branches: [无", gate)
 
     def test_self_target_skips_enforcement(self):
-        self.assertEqual(tsc._enforce_actions(REPO, REPO, AGENTS_SAMPLE), ([], [], []))
+        """母版自举不铺执法包——技能目录是仓库子目录的新布局也算自举。"""
+        self.assertEqual(tsc._enforce_actions(SKILL, SKILL, AGENTS_SAMPLE), ([], [], []))
+        # 本轮改造引入过的回归：技能搬到子目录后，"仓库根 vs 上游"不再相等，
+        # 若判据不跟着改，母版会把自己当成待接入项目、把执法包铺进仓库根。
+        self.assertEqual(tsc._enforce_actions(REPO, SKILL, AGENTS_SAMPLE), ([], [], []))
 
 
 class GateTimeoutTests(unittest.TestCase):
-    """P1-05：门禁命令超时必须终止进程组并返回 124。"""
+    """P1-05：门禁命令超时必须终止进程组并返回 124。
+
+    夹具用当前解释器而不是 `true` / `sleep`——那两个是 POSIX 专属，Windows 上
+    根本没有，会让"快速直通"与"超时击杀"两组用例在 Windows 上必然失败（A-02）。
+    """
 
     def test_fast_command_passes_through(self):
-        code, timed_out = tsc.run_gate_command("true", Path("."), 10)
+        code, timed_out = tsc.run_gate_command(QUICK_CMD, Path("."), 10)
         self.assertEqual((code, timed_out), (0, False))
 
     def test_nonzero_exit_passthrough(self):
@@ -368,45 +382,162 @@ class GateTimeoutTests(unittest.TestCase):
     def test_sleeping_command_is_killed_with_124(self):
         import time
         start = time.monotonic()
-        code, timed_out = tsc.run_gate_command("sleep 30", Path("."), 1)
+        code, timed_out = tsc.run_gate_command(SLOW_CMD, Path("."), 1)
         elapsed = time.monotonic() - start
         self.assertTrue(timed_out)
         self.assertEqual(code, tsc.EXIT_TIMEOUT)
-        self.assertLess(elapsed, 10, "超时后必须立即杀掉，不能等 sleep 跑完")
+        self.assertLess(elapsed, 10, "超时后必须立即杀掉，不能等它自己睡完")
 
     def test_default_timeout_constant(self):
         self.assertEqual(tsc.DEFAULT_TIMEOUT_S, 600)
         self.assertEqual(tsc.EXIT_TIMEOUT, 124)
 
 
-class PluginStructureTests(unittest.TestCase):
-    """P1-02 / P2-01：标准 ZCode 插件结构与清单一致性。"""
+class InterpreterRetargetTests(unittest.TestCase):
+    """A-01：命令源里的解释器名各平台不齐，执行前必须能兜住。
 
-    def test_plugin_json_valid_and_consistent(self):
-        manifest = json.loads(tsc.read_text(REPO / ".zcode-plugin/plugin.json"))
-        self.assertRegex(manifest["name"], r"^[a-z0-9][a-z0-9._-]{0,127}$")
-        self.assertEqual(manifest["name"], "tsc")
-        self.assertEqual(manifest["version"], tsc.upstream_version(REPO))
-        for field, rel in (("skills", "skills"), ("commands", "commands")):
-            self.assertTrue((REPO / manifest[field]).is_dir(), field)
-        self.assertTrue((REPO / manifest["hooks"]).is_file(), "hooks")
+    AGENTS.md §2 与 .agents/project.py 要求两处写**同一个静态字符串**才能做同源校验，
+    所以写不出 sys.executable；而 Windows 常见只有 python、部分 Linux/macOS 只有
+    python3。写死任何一个都会在另一平台上"命令找不到"，让门禁在最需要它的时候崩掉。
+    修复后：解析得到就原样执行，解析不到才换成当前解释器，并明确告警。
+    """
 
-    def test_hooks_json_uses_plugin_root_token(self):
-        data = json.loads(tsc.read_text(REPO / "hooks/hooks.json"))
-        entries = data["hooks"]["PostToolUse"]
-        matchers = [e.get("matcher") for e in entries]
-        self.assertIn("Edit|Write", matchers)
-        flat = json.dumps(data)
-        self.assertIn("${ZCODE_PLUGIN_ROOT}/scripts/structure_guard.py", flat)
-        self.assertNotIn("${ZCODE_PROJECT_DIR}", flat)  # 插件 Hook 不许猜项目路径
-        self.assertIn("--from-hook", flat)
-        for e in entries:
-            for h in e["hooks"]:
-                self.assertEqual(h["type"], "process")
-                self.assertIn("timeoutMs", h)
+    def test_missing_interpreter_falls_back_to_current(self):
+        cmd, changed = tsc.retarget_interpreter("python3.99 -m unittest")
+        self.assertTrue(changed)
+        self.assertIn(sys.executable, cmd)
+        self.assertTrue(cmd.endswith("-m unittest"))
+
+    def test_quoted_missing_interpreter_falls_back(self):
+        cmd, changed = tsc.retarget_interpreter('"python9" -c "pass"')
+        self.assertTrue(changed)
+        self.assertEqual(cmd, '"%s" -c "pass"' % sys.executable)
+
+    def test_resolvable_interpreter_is_left_alone(self):
+        cmd = '"%s" -m unittest' % sys.executable
+        self.assertEqual(tsc.retarget_interpreter(cmd), (cmd, False))
+
+    def test_non_interpreter_command_is_left_alone(self):
+        for cmd in ("echo hi", "node build.js", "pytest -q", ""):
+            self.assertEqual(tsc.retarget_interpreter(cmd), (cmd, False),
+                             "不该动这条命令：%r" % cmd)
+
+    def test_retargeted_command_really_runs(self):
+        code, timed_out = tsc.run_gate_command("python3.99 -c pass", Path("."), 10)
+        self.assertEqual((code, timed_out), (0, False))
+
+
+class SelfBootstrapTests(unittest.TestCase):
+    """A-03：判"目标就是上游本体的宿主仓库"的口径必须只有一处，否则自检必然说谎。
+
+    技能目录搬家到 `<仓库根>/skills/tsc/` 之后，判据不能再是"项目根 == 上游"
+    （那样母版仓库自己反而不算自举，sync 会把执法包铺进仓库根）。
+    """
+
+    def test_master_repo_with_skill_subdir_is_self_bootstrap(self):
+        self.assertTrue(tsc.is_self_bootstrap(REPO, SKILL))
+
+    def test_legacy_root_layout_is_still_self_bootstrap(self):
+        self.assertTrue(tsc.is_self_bootstrap(REPO, REPO))
+        self.assertTrue(tsc.is_self_bootstrap(REPO / ".", REPO))
+
+    def test_subdir_is_not_self_bootstrap(self):
+        self.assertFalse(tsc.is_self_bootstrap(REPO / "tests", REPO))
+
+    def test_consumer_project_is_not_self_bootstrap(self):
+        """宿主把技能装进项目内的 .claude/skills/ 时，那是待接入项目，必须照常部署。"""
+        import shutil
+        proj = Path(tempfile.mkdtemp(prefix="tsc-cons-"))
+        self.addCleanup(shutil.rmtree, proj, True)
+        vendored = proj / ".claude" / "skills" / "tsc"
+        vendored.mkdir(parents=True)
+        self.assertFalse(tsc.is_self_bootstrap(proj, vendored))
+
+    def test_none_upstream_is_not_self_bootstrap(self):
+        self.assertFalse(tsc.is_self_bootstrap(REPO, None))
+
+
+class GitWorktreeTests(unittest.TestCase):
+    """`git_worktree_of`：技能目录自身是 git 副本、或是某仓库的子目录，都要认出来。
+
+    只看 `<技能根>/.git` 会把母版布局误判成"非 git 安装"，进而谎报
+    `tsc update` 不可用、doctor 的"本体更新通道"常年报错。
+    """
+
+    def test_master_layout_finds_repo_root(self):
+        self.assertEqual(tsc.git_worktree_of(SKILL), REPO)
+
+    def test_plain_dir_has_no_worktree(self):
+        import shutil
+        tmp = Path(tempfile.mkdtemp(prefix="tsc-nogit-"))
+        self.addCleanup(shutil.rmtree, tmp, True)
+        self.assertIsNone(tsc.git_worktree_of(tmp))
+
+
+class SkillPackagingTests(unittest.TestCase):
+    """技能打包不变量：自包含 + 平台中立。
+
+    历史：v4.0.0 曾把本仓库做成单一平台的插件（平台清单 + hook 清单 + 市场目录），
+    那套外壳只能被那一个平台安装，与"通用技能"的目标相反，已移除。这里锁死两条：
+    技能目录必须自包含（拷这一个目录到任何平台的技能目录就能跑），
+    且全仓不得再出现任何平台私有清单与占位符。
+    """
+
+    REQUIRED = (
+        "SKILL.md",
+        "VERSION",
+        "scripts/tsc.py",
+        "scripts/structure_guard.py",
+        "scripts/bracket_lint.py",
+        "scripts/install_hook.py",
+        "templates/AGENTS.md",
+        "templates/project.example.py",
+        "templates/enforcement/gate.yml",
+        "templates/enforcement/.pre-commit-config.yaml",
+        "templates/enforcement/commitlint.config.js",
+        "templates/enforcement/README.md",
+        "references/AUDIT-SPEC.md",
+        "references/BOOTSTRAP.md",
+    )
+
+    def test_skill_dir_is_self_contained(self):
+        """运行期所需的一切都在技能目录内，不依赖仓库其它部分。"""
+        for rel in self.REQUIRED:
+            self.assertTrue((SKILL / rel).is_file(), "技能目录缺 %s" % rel)
+
+    def test_upstream_root_is_skill_dir(self):
+        # tsc.py 以"脚本的上一级"定位上游：那一级必须是技能根，否则 templates/ 找不到
+        self.assertEqual(tsc.upstream_root(), SKILL)
+        self.assertEqual(tsc.validate_upstream(tsc.upstream_root()), [])
+
+    def test_no_platform_private_packaging_left(self):
+        # 平台名同样拆开拼：本测试文件自己也在扫描范围内，字面量会把测试扫成违规
+        platform = "zc" + "ode"
+        for rel in ("." + platform + "-plugin", "marketplace.json", "hooks", "hooks/hooks.json"):
+            self.assertFalse((REPO / rel).exists(), "残留平台私有件：%s" % rel)
+
+    def test_no_platform_private_tokens_anywhere(self):
+        """全仓不得再出现平台专属变量/清单名；CHANGELOG 是历史记录，按规则不改不扫。
+
+        断言用的字面量刻意拆开拼接——否则本测试会把自己扫成违规
+        （与"提及 ≠ 声明"同一类坑）。
+        """
+        token = "zc" + "ode"
+        marker = "${" + "zc" + "ode_plugin_root}"
+        files = [REPO / "README.md", REPO / "AGENTS.md"]
+        for base in (SKILL, REPO / "tests"):
+            files.extend(p for p in sorted(base.rglob("*")) if p.is_file())
+        for path in files:
+            if "__pycache__" in path.parts:
+                continue
+            if path.suffix not in (".py", ".md", ".yml", ".yaml", ".json", ".js"):
+                continue
+            text = tsc.read_text(path).lower()
+            self.assertNotIn(token, text, path.as_posix())
+            self.assertNotIn(marker, text, path.as_posix())
 
     def test_skill_frontmatter_has_only_standard_fields(self):
-        text = tsc.read_text(REPO / "skills/tsc/SKILL.md")
+        text = tsc.read_text(SKILL / "SKILL.md")
         self.assertTrue(text.startswith("---\n"))
         front = text.split("---\n")[1]
         self.assertRegex(front, r"(?m)^name: tsc\s*$")
@@ -418,40 +549,34 @@ class PluginStructureTests(unittest.TestCase):
 
     def test_commands_exist(self):
         for name in ("tsc.md", "tsc-update.md", "tsc-status.md", "tsc-sync.md"):
-            self.assertTrue((REPO / "commands" / name).is_file(), name)
-        update_cmd = tsc.read_text(REPO / "commands/tsc-update.md")
-        sync_cmd = tsc.read_text(REPO / "commands/tsc-sync.md")
+            self.assertTrue((SKILL / "commands" / name).is_file(), name)
+        update_cmd = tsc.read_text(SKILL / "commands/tsc-update.md")
+        sync_cmd = tsc.read_text(SKILL / "commands/tsc-sync.md")
         # P2-07：本体升级与项目同步是两个入口，互不越界
         self.assertIn("不要", update_cmd + sync_cmd)
-
-    def test_marketplace_json_matches_plugin(self):
-        catalog = json.loads(tsc.read_text(REPO / "marketplace.json"))
-        manifest = json.loads(tsc.read_text(REPO / ".zcode-plugin/plugin.json"))
-        self.assertEqual(catalog["name"], "tsc")
-        entry = [p for p in catalog["plugins"] if p["name"] == "tsc"][0]
-        self.assertEqual(entry["version"], manifest["version"])
-        self.assertEqual(entry["source"], ".")
 
     def test_no_hardcoded_proxy_anywhere_user_facing(self):
         # P2-02：公共仓库绝不绑定作者本机代理端口
         for rel in ("README.md", "skills/tsc/SKILL.md",
-                    "commands/tsc.md", "commands/tsc-update.md", "commands/tsc-sync.md"):
+                    "skills/tsc/commands/tsc.md",
+                    "skills/tsc/commands/tsc-update.md",
+                    "skills/tsc/commands/tsc-sync.md"):
             self.assertNotIn("127.0.0.1:7897", tsc.read_text(REPO / rel), rel)
 
     def test_version_single_source(self):
-        # P2-10：版本发布真源只有根 VERSION；.agents/VERSION 只是部署生成物
+        # P2-10：版本发布真源只有技能目录 VERSION；.agents/VERSION 只是部署生成物
         self.assertFalse((REPO / ".agents" / "VERSION").exists() and
                          tsc.read_text(REPO / ".agents" / "VERSION").strip() !=
-                         tsc.upstream_version(REPO),
-                         ".agents/VERSION 若存在必须与根 VERSION 一致")
-        self.assertEqual(tsc.upstream_version(REPO), "4.0.0")
+                         tsc.upstream_version(SKILL),
+                         ".agents/VERSION 若存在必须与技能 VERSION 一致")
+        self.assertEqual(tsc.upstream_version(SKILL), "4.0.0")
 
 
 class EnforcementTemplateTests(unittest.TestCase):
     """执法包模板自身的静态约束（供应链 / Node 条件）。"""
 
     def test_gate_yml_pins_actions_and_dependencies(self):
-        gate = tsc.read_text(REPO / "templates/enforcement/gate.yml")
+        gate = tsc.read_text(SKILL / "templates/enforcement/gate.yml")
         uses_lines = [
             ln.strip() for ln in gate.splitlines()
             if "uses:" in ln and not ln.strip().startswith("#")
@@ -464,7 +589,7 @@ class EnforcementTemplateTests(unittest.TestCase):
 
     def test_gate_yml_commitlint_condition_only_uses_commitlint_file(self):
         # P1-04：Python-only 项目（没有 commitlint.config.js）绝不触发 npm 安装
-        gate = tsc.read_text(REPO / "templates/enforcement/gate.yml")
+        gate = tsc.read_text(SKILL / "templates/enforcement/gate.yml")
         self.assertIn("hashFiles('commitlint.config.js') != ''", gate)
         for ln in gate.splitlines():
             if "hashFiles(" in ln and "npm" not in ln:
@@ -473,16 +598,34 @@ class EnforcementTemplateTests(unittest.TestCase):
 
     def test_precommit_pins_gitleaks_to_sha(self):
         # P2-06：pre-commit 远程仓钉 40 位 commit SHA，保留 tag 注释
-        text = tsc.read_text(REPO / "templates/enforcement/.pre-commit-config.yaml")
+        text = tsc.read_text(SKILL / "templates/enforcement/.pre-commit-config.yaml")
         for ln in text.splitlines():
             if ln.strip().startswith("rev:"):
                 self.assertRegex(ln, r"rev: [0-9a-f]{40}", ln)
         self.assertIn("# v8.30.1", text)
 
+    def test_precommit_entry_does_not_hardcode_python3(self):
+        """A-05：entry 里不许写死 `python3`——Windows 上根本没有这个名字。
+
+        `language: system` 不建隔离环境，entry 的首令牌直接由系统 PATH 解析；
+        Windows 的 venv / 官方安装器只给 `python.exe`（本机实测：venv 里只有
+        python.exe 与 pythonw.exe，没有 python3）。改用 `language: python` 后由
+        pre-commit 自建环境并调用该环境里的解释器，跨平台一致（官方文档：python
+        钩子在 linux / macOS / windows / cygwin 上均受支持，无需系统级依赖）。
+        """
+        text = tsc.read_text(SKILL / "templates/enforcement/.pre-commit-config.yaml")
+        entry_lines = [ln.strip() for ln in text.splitlines()
+                       if ln.strip().startswith("entry:")]
+        self.assertTrue(entry_lines, "模板里应有 entry")
+        for ln in entry_lines:
+            self.assertNotIn("python3", ln, "写死 python3 在 Windows 上不可解析：%s" % ln)
+        self.assertIn("language: python", text)
+        self.assertIn("structure_guard", text)
+
     def test_enforcement_templates_carry_managed_marker(self):
-        for rel in ("templates/enforcement/gate.yml",
-                    "templates/enforcement/.pre-commit-config.yaml",
-                    "templates/enforcement/commitlint.config.js"):
+        for rel in ("skills/tsc/templates/enforcement/gate.yml",
+                    "skills/tsc/templates/enforcement/.pre-commit-config.yaml",
+                    "skills/tsc/templates/enforcement/commitlint.config.js"):
             self.assertIn(tsc.MANAGED_MARKER, tsc.read_text(REPO / rel), rel)
 
 

@@ -14,6 +14,7 @@
 
 安全约束（刻意收窄）：
   - 只写目标仓库的 .git/hooks/pre-commit，不碰任何源码文件
+    （worktree / submodule 会自动定位到公共 git 目录，见 _resolve_common_dir）
   - 已存在同名钩子默认拒绝覆盖，除非显式 --force（覆盖前自动备份为 pre-commit.bak）
   - 不修改 git 全局配置，不写 ~/.gitconfig
 
@@ -73,6 +74,47 @@ fi
 """
 
 
+def _read_first_line(path: str) -> str | None:
+    """读文件首行（去空白）；读不到返回 None。"""
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                return line.strip()
+    except OSError:
+        return None
+    return None
+
+
+def _resolve_common_dir(git_dir: str) -> str:
+    """per-worktree git 目录 -> 公共 git 目录。
+
+    worktree 的钩子装在**公共** git 目录里（主仓库的 .git/hooks）：写进
+    .git/worktrees/<名字>/hooks 是无效的。git 用 commondir 文件记录这层跳转，
+    普通仓库没有这个文件，原样返回即可。
+    """
+    target = _read_first_line(os.path.join(git_dir, "commondir"))
+    if not target:
+        return git_dir
+    if not os.path.isabs(target):
+        target = os.path.join(git_dir, target)
+    resolved = os.path.normpath(target)
+    return resolved if os.path.isdir(resolved) else git_dir
+
+
+def _git_dir_from_file(git_file: str, base: str) -> str | None:
+    """`.git` 是文件（worktree / submodule）时，解析里面的 `gitdir: <路径>`。"""
+    line = _read_first_line(git_file)
+    if not line or not line.lower().startswith("gitdir:"):
+        return None
+    target = line.split(":", 1)[1].strip()
+    if not target:
+        return None
+    if not os.path.isabs(target):
+        target = os.path.join(base, target)
+    git_dir = os.path.normpath(target)
+    return _resolve_common_dir(git_dir) if os.path.isdir(git_dir) else None
+
+
 def find_git_dir(repo: str) -> str | None:
     d = os.path.abspath(repo)
     # 目录不存在时直接失败：否则 os.path.dirname 会一路上溯，
@@ -83,8 +125,9 @@ def find_git_dir(repo: str) -> str | None:
         cand = os.path.join(d, ".git")
         if os.path.isdir(cand):
             return cand
-        if os.path.isfile(cand):  # worktree / submodule：.git 是文件
-            return None
+        if os.path.isfile(cand):
+            # worktree / submodule：.git 是文件，内容是 gitdir 指针
+            return _git_dir_from_file(cand, d)
         parent = os.path.dirname(d)
         if parent == d:
             return None
@@ -183,7 +226,8 @@ def main(argv=None) -> int:
     make_executable(hook_path)
 
     print(f"已安装结构门禁：{hook_path}")
-    print("  仓库根：" + os.path.dirname(git_dir))
+    print("  仓库根：" + os.path.abspath(args.repo))
+    print("  git 目录：" + git_dir)
     print("  解释器：" + sys.executable)
     print("  检查器：" + os.path.join(os.path.dirname(os.path.abspath(__file__)), "structure_guard.py"))
     print("  跳过一次提交：git commit --no-verify")

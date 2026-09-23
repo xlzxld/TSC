@@ -443,10 +443,29 @@ class Scanner:
 
     # ---------- 模板串插值（JS `${...}` 内是完整表达式，可嵌套串与模板） ----------
 
+    def _try_regex_at(self, k: int):
+        """在插值内部 k 位置按正则字面量跳过；不是正则返回 None。
+
+        复用主扫描的 `_try_js_regex`（同一套"前一个有效字符 / 关键字"判据），
+        临时借用 self.i 并原样还原——`_adv` 只动 i/line/ls，且正则不可能跨行。
+        """
+        save = (self.i, self.line, self.ls)
+        self.i = k
+        try:
+            return self.i if self._try_js_regex() else None
+        finally:
+            self.i, self.line, self.ls = save
+
     def _scan_interp(self, k: int, line: int, ls: int):
         """从 `${` 的 `{` 之后扫到配对 `}`。返回 (其后位置, 行号, 行首偏移,
         括号事件表)——插值是真实 JS 表达式，其中的 ( ) [ ] { } 参与平衡，
-        事件带回主扫描按正常括号处理；嵌套模板的文本部分不产生事件。"""
+        事件带回主扫描按正常括号处理；嵌套模板的文本部分不产生事件。
+
+        插值内必须按 JS 词法逐层吃：注释、正则字面量、字符串都要先跳过。
+        否则 `${ s.replace(/'/g, "") }` 里正则内的那个 `'` 会被当成字符串开头，
+        一路吃到 EOF 并顺手吞掉插值的闭 `}`——合法代码被判成"字符串没闭合 +
+        括号没闭合"（A-08 实测：完全合法的 .js 被误报 3 处）。
+        """
         src, n = self.src, self.n
         d = 1
         events = []
@@ -464,9 +483,37 @@ class Scanner:
             elif ch in "\"'":
                 q = ch
                 k += 1
-                while k < n and src[k] != q:
-                    k += 2 if src[k] == "\\" else 1
-                k += 1
+                # JS 单/双引号串不允许裸换行，但 `\` + 换行是合法的行继续。
+                # 撞到裸换行即视为未闭合：停在那里交给外层处理，绝不再吃到文件尾。
+                while k < n and src[k] != q and src[k] != "\n":
+                    if src[k] == "\\":
+                        if src[k + 1:k + 2] == "\n":
+                            line += 1
+                            ls = k + 2
+                        k += 2
+                    else:
+                        k += 1
+                if k < n and src[k] == q:
+                    k += 1
+            elif ch == "/":
+                if src.startswith("//", k):
+                    e = src.find("\n", k)
+                    k = n if e < 0 else e
+                elif src.startswith("/*", k):
+                    e = src.find("*/", k + 2)
+                    if e < 0:
+                        k = n
+                    else:
+                        newlines = src.count("\n", k, e)
+                        if newlines:
+                            line += newlines
+                            ls = src.rfind("\n", k, e) + 1
+                        k = e + 2
+                elif self.p.get("regex"):
+                    end = self._try_regex_at(k)
+                    k = end if end is not None else k + 1
+                else:
+                    k += 1
             elif ch == "`":
                 k, line, ls = self._scan_nested_template(k, line, ls)
             elif ch in "([":
@@ -750,6 +797,14 @@ _SELFTEST = [
     ("js 少右花括号", "js", "function f() {\n  return 1;\n", False),
     ("js 除号不误判为正则", "js", "const a = 10 / 2;\nconst b = a / 5;\n", True),
     ("js 正则里的括号", "js", "if (x) { y = z.replace(/\\)/g, ''); }\n", True),
+    # A-08（2026-09-23）：插值内必须先按 JS 词法吃掉正则/注释，并给引号串加换行边界
+    ("js 插值内正则含引号（合法）", "js",
+     "const s = `${items.map(s => s.replace(/'/g, \"\")).join(\",\")}`;\n", True),
+    ("js 插值内注释含引号（合法）", "js", "const t = `${ /* don't */ x }`;\n", True),
+    ("js 插值内除号（合法）", "js", "const u = `${a / 2}`;\n", True),
+    # 插值内"引号没配对"刻意只在 L1 停住、不报错：若在这里报，合法 JSX 文案里的撇号
+    # （如 `${<Foo>don't</Foo>}`）就会被误伤。真语法问题归 L2（ast / node --check）。
+    ("js 插值内串跨行（交 L2 判语法）", "js", "const t = `${ \"abc\n}`;\n", True),
     ("go 反引号原串", "go", "s := `a)b(c`\n", True),
     ("go 少右花括号", "go", "func f() {\n\tx := []int{1, 2\n", False),
     ("rust 生命周期与字符", "rust", "fn f<'a>(x: &'a str) -> char { 'x' }\n", True),
