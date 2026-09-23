@@ -1,7 +1,7 @@
 # 本地 Agent 工作区（不属于契约内容）
 .workbuddy/
 
-# 同步器写入本仓库的部署生成物与 provenance（发布真源是根 VERSION，不入库）
+# 同步器写入本仓库的部署生成物与 provenance（发布真源是 skills/tsc/VERSION，随技能本体入库）
 .agents/.source
 .agents/VERSION
 .agents/.tsc-backup/
