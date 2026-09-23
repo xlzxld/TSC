@@ -1,5 +1,106 @@
 # 变更记录 (CHANGELOG)
 
+## v5.0.0（2026-09-23）
+
+**依据**：外部体检报告的逐条核实 + 用户要求"要通用技能，不要单一平台专属技能"。报告 11 条里 **6 条成立、3 条证据有误或定级虚高、2 条属主观建议**（逐条核实结论见文末）。
+
+### 破坏性变更：去掉平台专属外壳，技能目录改为自包含
+
+| # | 变更 | 文件 |
+|---|---|---|
+| 1 | **删除平台私有清单**：`.zcode-plugin/plugin.json`、`marketplace.json`、`hooks/hooks.json`。仓库不再绑定任何编辑器/插件市场，任何支持 Agent Skill 的宿主都能装 | 全仓 |
+| 2 | **技能目录自包含**：`scripts/`、`templates/`、`commands/`、`VERSION` 全部收进 `skills/tsc/`——拷这一个目录进宿主技能目录即可运行，运行期不依赖仓库其它部分；`upstream_root()` 语义随之变为"技能根" | `skills/tsc/**` |
+| 3 | **去平台化措辞**：`<插件根>` → `<技能根>`，清除平台专属字样与 `${平台_ROOT}` 类变量；`update` 的提示语改为"打开宿主平台的插件/技能管理页" | 全仓 |
+| 4 | **不再分发平台 hook 清单**：保留通用接入口 `structure_guard.py --from-hook`（stdin JSON，0 = 通过 / 2 = 拦截），由宿主自行配置；技能不预设任何平台的 hook 格式 | `scripts/structure_guard.py`、`SKILL.md`、`README.md` |
+| 5 | **平台中立回归测试**：技能目录自包含、全仓不得出现平台私有清单与专属变量。断言字面量刻意拆开拼接——否则测试会把自己扫成违规（与"提及 ≠ 声明"同一类坑） | `tests/unit/test_tsc_unit.py` |
+
+### 缺陷修复（报告核实成立，均附回归测试）
+
+| ID | 修复 | 实测取证 |
+|---|---|---|
+| A-02 | 测试夹具不再写死 `true` / `sleep`（POSIX 专属），统一改用当前解释器 | 修复前默认 PATH 下 **4 例失败**（`'true'/'sleep' 不是内部或外部命令`），修复后 148 例全绿 |
+| A-08 | JS 模板串插值内按 JS 词法逐层吃：先跳注释（`//`、`/* */`），再按主扫描同款判据识别正则字面量，并给引号串加"裸换行即中止"边界 | 修复前**完全合法**的 `s.replace(/'/g, "")` 被测出 3 处结构问题（rc=1）；修复后 rc=0。真 SyntaxError 仍由 L2（`node --check`）拦住 |
+| A-03 | `is_self_bootstrap()` 抽为唯一判据，`doctor` 与 `_enforce_actions` 共用；母版自检不再谎报 4 项"执法包缺失" | `doctor`：修复前 9 通过 / **1 警告（4 条假缺失）**，修复后 **10 通过 / 0 警告 / 0 失败** |
+| A-04 | `install_hook.find_git_dir()` 支持 `.git` 是文件：解析 `gitdir:` 指针，再过 `commondir` 落到**公共** git 目录——worktree 的钩子装在公共目录才生效，写进 `.git/worktrees/<名>/hooks` 是白写 | 新增 6 条测试：普通仓库 / worktree / submodule / 坏指针 / 目录不存在 / 端到端装-卸 |
+| A-05 | pre-commit 模板的结构门禁钩子：解释器名改由 `install` / `sync` **按部署机器探测后填入**（模板只留默认值） | 四种写法逐一实测：`language: python`（我最初的修法）**不可用**；`language: script` + sh 启动器不可用；静态写死 `python3` / `python` 各只成立一半。详见下方"修正"节 |
+| A-01 | 门禁命令解释器回退：首令牌是 `python` / `python3` / `py` 但 PATH 解析不到时，换成当前解释器并明确告警；CI 内联壳同口径 | 新增 5 条单测；命令源（§2 与 project.py）仍可保持静态字符串，同源校验不受影响 |
+| A-09 | 契约母版与本仓库实例同批脱水：78 → **74 行**，行数余量 1 → 5 | `wc -l` 两文件均 74（门禁上限 79） |
+
+### 顺带修掉三处报告没提的缺陷
+
+| # | 问题 | 修复 |
+|---|---|---|
+| 1 | **母版自举回归（本轮改造引入、当场修掉）**：技能目录改成仓库子目录后，`is_self_bootstrap` 仍按"项目根 == 上游"判，导致母版仓库把自己当成待接入项目、把执法包铺进仓库根 | 判据改为"上游 == `<项目根>/skills/tsc`"；并按用户要求补测试防复发（含"宿主把技能装进项目内 `.claude/skills/` 时不算自举"这一反例） |
+| 2 | `doctor` 的"本体更新通道"只看 `<技能根>/.git`，母版布局（`.git` 在仓库根）被误报"非 git 安装"、`tsc update` 被谎称不可用 | 新增 `git_worktree_of()` 逐级上溯找 git 工作树；`doctor` 与 `update` 共用 |
+| 3 | e2e 夹具 `adapt_section2` 用 `re.sub` 拼替换串，Windows 路径的反斜杠被当成转义（`re.PatternError: bad escape \U`） | 改用函数替换，结果一律按字面量处理 |
+
+### 补上母版自身的多平台回归线（原 A-06）
+
+| # | 变更 | 文件 |
+|---|---|---|
+| 1 | 新增 `.github/workflows/ci.yml`：`ubuntu` + `windows` + `macos` 三平台跑同一套门禁（两个自检 + `verify` + `check-config`），`fail-fast: false` 免得一个平台红掩盖另一个平台的信息 | `.github/workflows/ci.yml` |
+| 2 | 与托管的 `gate.yml` **刻意分开**：不同文件名、不在 `ENFORCE_DEPLOY`、不带 `tsc-managed` 标记，`install`/`sync` 不碰它。母版"不部署自己的执法包"这条设计不变量保持不变 | 同上 |
+| 3 | 契约预算改为自动断言（原来只写在发版清单里手敲）：行数 < 80、规则数 ≤ 30，母版与实例一并受检 | `tests/unit/test_tsc_unit.py` |
+
+### 修正：A-05 的第一次修法是错的（`language: python` 实测不可用）
+
+上一版把 pre-commit 的结构门禁钩子从 `language: system` + `python3` 改成了
+`language: python` + `python`，依据是官方文档说 python 钩子跨平台受支持、由 pre-commit
+自建环境调用。**端到端实测证伪**（2026-09-23，四种写法对照）：
+
+| 写法 | 实测结果 |
+|---|---|
+| `system` + `python3`（原始） | ✅ 能跑并拦住坏文件（本机有 `python3.exe`；只有 `python` 的机器上才会报 `Executable not found`，属**报错拦住**而非静默放行） |
+| `system` + `python` | ✅ 能跑并拦住（但 macOS / 多数 Linux 上通常没有 `python`） |
+| `python` + `python`（上一版修法） | ❌ `ERROR: Directory '.' is not installable. Neither 'setup.py' nor 'pyproject.toml' found.` —— pre-commit 会先对项目根 `pip install .`，**没有可安装包的项目直接失败，所有平台一起坏** |
+| `script` + 项目内 sh 启动器 | ❌ `Executable '/bin/sh' not found`（Windows 上没有 `/bin/sh`） |
+
+**结论**：pre-commit 的 local 钩子只有 `language: system` 能跑项目内脚本，而 system 语言的
+`entry` 首令牌**完全靠系统 PATH 解析**；`python3`（macOS / 多数 Linux）与 `python`（Windows
+常见）没有交集，**静态模板写不出跨平台的名字**。
+
+最终做法：模板保留默认值 `python3`，真正的名字由 `deploy_enforcement` 在 `install` / `sync`
+时用 `shutil.which` 探测本机后填入（与 gate.yml 按 §2 填分支名同一机制）。效果上就是
+"按平台分别配置"——落盘件在每个平台各不相同，但不需要维护多份重复真身；换平台后重跑一次
+`tsc sync` 即自动校正（内容比对走同一套渲染逻辑，能自愈）。
+
+> **教训登记**：这条缺陷我连着判错两次——先是低估（"报错拦住，不算事"），后是修错
+> （照文档推断出一个更坏的写法）。两次都不是靠读代码发现的，是靠**端到端跑一遍**。
+> 这也是"新增多平台 CI"之外，A-05 最终被留成"仅静态回归锁定"的原因：CI 不装
+> pre-commit framework，这一层只能靠人工实测。
+
+### CI 首跑就抓到一类真缺陷：非 UTF-8 控制台下中文输出把进程带崩
+
+`.github/workflows/ci.yml` 第一次跑就红了——macOS / ubuntu 全绿，**只有 Windows 红**，4 个失败同源：
+
+| 现象 | 根因 |
+|---|---|
+| `structure_guard.py --selftest`、`structure_guard.py <坏文件>`、`install_hook.py --repo` 三例 `UnicodeEncodeError: 'charmap' codec can't encode ...` | 这三个入口的 UTF-8 兜底只写在 `if __name__ == "__main__"` 里，**in-process 调用（宿主 hook、单元测试）走不到那条分支**；英文版 Windows 的控制台/管道编码是 cp1252，中文 `print` 直接抛异常、进程 rc=1——`install_hook` 的安装动作其实**已经成功落盘**，调用方却以为失败了 |
+| `test_gate_inline_shell_matches_local` 期望 3 实得 1 | CI 内联壳从头到尾没有强制 UTF-8，第一条中文提示就崩，退出码从"全未配置 = 假绿 3"变成 1——**两套壳的判定就此漂移**，而本地 `tsc.py` 一直有这层兜底 |
+
+修复：三个入口各自加 `_init_stdout()` 并在**入口函数开头**调用（不依赖 `__main__`）；CI 内联壳补上 `reconfigure(encoding="utf-8", errors="replace")`，与 `tsc.py` 对齐。
+
+回归测试刻意用 `PYTHONIOENCODING=cp1252` 把子进程压成非 UTF-8 控制台——本机是 cp936、能编码中文，**不这样强制就复现不出来**（这正是"为什么必须有 Windows CI"的实证）。
+
+> **顺带修正上一轮的判定**：报告 A-07 说"CI 内联 Python 未配置 UTF-8 编码"，我上轮判它"归错地方、价值低"，**判错了**。诊断方向是对的，只是后果被我低估——不是"乱码"，而是**进程崩掉、退出码改变**。已按报告原意修掉。
+
+### 未采纳（登记备查，附理由）
+
+- **A-06 原判"母版无 CI 是漏做"**：措辞不准确——母版不部署自己的执法包是**刻意设计**（避免第二份真身，有测试锁定）。但"缺多平台回归线"这个代价是真的，已按上表补上，并且**首跑就抓到了上面那类缺陷**。
+- **A-07**：已采纳（见上节）。原判定的错误登记在此，不删。
+- **A-10（taskkill 换 Windows Job Object）**：优化建议而非缺陷；现有实现已有单进程终止兜底，超时结论不受影响。
+- **A-11（`tsc.py` 拆模块）**：主观架构意见，与"零依赖单文件最好分发"的既有取舍冲突。
+
+### 版本说明
+
+- **v4.0.0 → v5.0.0（major）**：发行形态破坏性变更——平台专属外壳移除、技能目录重排、`<仓库根>/scripts/` 路径不再存在。用平台市场装的副本需要改用"克隆/拷贝技能目录"；存量项目跑一次 `sync` 即可。
+- **契约标记代次仍为 `v4`**（`<!-- tsc-managed-contract:v4 -->`）。它是**契约格式代次**，不是发行号：契约条款与 §2 结构本轮没变，所以不动它——改了会让存量项目的 marker 认不出来，等于把所有下游项目误判成"外部 AGENTS.md"而拒绝同步。
+- 三处版本头（母版 `AGENTS.md`、`AUDIT-SPEC.md`、`BOOTSTRAP.md`）与执法包 README 同批更新；版本真源仍只有 `skills/tsc/VERSION` 一处。
+
+**本轮实测**：157 用例全绿（`python -m unittest discover -s tests -p "test_*.py"` rc=0）｜`tsc.py verify` rc=0（真实执行 LINT + TEST）｜`check-config` rc=0｜`doctor` rc=0（10 通过 / 0 警告 / 0 失败）｜结构门禁自检 35/35｜bracket_lint 自检 30/30｜`wc -l AGENTS.md` = 74 与母版零漂移。
+**多平台 CI 实测**：`ci.yml` 在 `ubuntu-latest` / `windows-latest` / `macos-latest` 三个 job 上**全部 success**（每个 job 的自检 / verify / check-config 三步均绿）。这一轮的首跑记录见"CI 首跑就抓到一类真缺陷"一节。
+**pre-commit 写法对照实验**：四种写法在 Windows 上逐一实跑，结论见"修正：A-05 的第一次修法是错的"。A-05 本身**仍无自动化回归**——CI 不装 pre-commit framework，只能靠人工实测。
+
 ## v4.0.0（2026-09-21）
 
 **依据**：《TSC 全方位评审与改造规格 v1.0》。目标不是继续堆规则，而是把 TSC 收敛成真正可安装、可发现、可使用、可升级、可回滚的 Agent Skill / ZCode Plugin。

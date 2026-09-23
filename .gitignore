@@ -14,6 +14,3 @@ __pycache__/
 .DS_Store
 Thumbs.db
 *.swp
-
-# ZCode 客户端自动生成的本地工作区文件（不入库）
-.zcodeignore

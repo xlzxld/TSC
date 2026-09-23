@@ -2,9 +2,8 @@
 
 <!-- tsc-managed-contract:v4 -->
 
-> **版本 v4.0.0** | 本文件由 TSC 技能托管（变更随本体升级分发），并与 `AUDIT-SPEC.md` / `BOOTSTRAP.md` 同批修订。
-> **标准契约**：所有 AI 编码助手（Claude Code、Cursor、Copilot、Windsurf 等）进入本项目的唯一标准契约。
-> **注意力预算**：常驻仅本文件（< 80 行 / ≤2000 token / ≤30 条规则，行数以 `wc -l`（LF）计）；深度细则按需加载；可机器执法的交给 hooks / CI，不占提示词预算。
+> **版本 v5.0.0** | 本文件由 TSC 技能托管、随本体升级分发，并与 `AUDIT-SPEC.md` / `BOOTSTRAP.md` 同批修订。
+> **唯一标准契约**：所有 AI 编码助手（Claude Code、Cursor、Copilot、Windsurf 等）进入本项目的入口。**注意力预算**：常驻仅本文件（< 80 行 / ≤2000 token / ≤30 条规则，`wc -l` LF 计）；深度细则按需加载；可机器执法的交给 hooks / CI，不占提示词预算。
 
 ---
 
@@ -34,7 +33,7 @@
 | 技术栈 | Python 3（仅标准库）+ Markdown 文档 | — |
 | 构建 (Build) | 无 | — |
 | 测试 (Test) | `python3 -m unittest discover -s tests -p "test_*.py"` | ✅ 全绿；已知豁免清单内且非本次引入的失败不阻断，但须列出 |
-| 静态检查 (Lint) | `python3 scripts/structure_guard.py --quiet --color never .` | ✅ 退出码 0；降级项须列出 |
+| 静态检查 (Lint) | `python3 skills/tsc/scripts/structure_guard.py --quiet --color never .` | ✅ 退出码 0；降级项须列出 |
 | 格式化 (Format) | 无 | — |
 | 主干分支 | main | ✅ 禁止未经 Pull Request 直接向主干提交 |
 | 已知豁免清单 | 无 | 唯一合法的基线失败白名单，新增须走 PR；按 `命令:条目描述` 逐条登记，便于机器比对与复核 |
@@ -70,9 +69,6 @@
 
 ## 5. 外置文件（按需加载，不常驻）
 
-| 文件 | 何时读 |
-|---|---|
-| TSC 技能 `references/AUDIT-SPEC.md` | 说"体检"时 |
-| TSC 技能 `references/BOOTSTRAP.md` | 接入契约 / 项目探测填充时 |
+- 说"体检"时读 TSC 技能 `references/AUDIT-SPEC.md`；接入契约 / 项目探测填充时读 `references/BOOTSTRAP.md`。
 
 > 深度细则不内联进本文件——挤占高频规则的注意力预算。**项目内只留契约（本文件）+ 项目配置（`.agents/project.py` / `.agents/VERSION` / `.agents/.source`）+ 执法包落盘件**；执行逻辑常驻 TSC 技能目录，接入与更新由技能统一执行。

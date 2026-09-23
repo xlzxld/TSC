@@ -37,6 +37,16 @@ repos:
   #    提交前对暂存文件跑五层结构检查（括号平衡/语法/缩进/形态）。
   #    只在本钩子层（pre-commit framework）激活时运行；
   #    用 install_hook.py 裸钩子的项目与此条目二选一（叠加只是重复检查，不冲突）。
+  #
+  #    ⚠️ entry 里的解释器名（python3 / python）由 `tsc install / sync` 按**部署这台
+  #    机器**探测后填入，不是模板写死的值。原因：pre-commit 的 local 钩子只有
+  #    `language: system` 能跑项目内脚本，而 system 语言的 entry 首令牌**完全靠系统
+  #    PATH 解析**——python3（macOS / 多数 Linux）与 python（Windows 常见）没有交集，
+  #    写死任何一个都会在另一平台报 "Executable ... not found" 把提交堵住。
+  #    换平台后重跑一次 `tsc sync` 即自动校正（内容比对走同一套渲染逻辑，能自愈）。
+  #    （另两条路已实测排除：language: python 会先对项目根 pip install .，没有
+  #      setup.py / pyproject.toml 就 ERROR: Directory '.' is not installable；
+  #      language: script + 项目内 sh 启动器在 Windows 上报 /bin/sh not found。）
   - repo: local
     hooks:
       - id: structure-guard

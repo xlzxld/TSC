@@ -10,8 +10,8 @@ __all__ = ["FMT_CHECK_CMD", "LINT_CMD", "TEST_CMD", "BUILD_CMD"]
 # 格式化检查：必须是 --check 等价命令，禁止写会改文件的写模式
 FMT_CHECK_CMD = None
 
-# 静态检查：结构门禁（正本在插件 scripts/ 目录）
-LINT_CMD = "python3 scripts/structure_guard.py --quiet --color never ."
+# 静态检查：结构门禁（正本在技能目录 skills/tsc/scripts/）
+LINT_CMD = "python3 skills/tsc/scripts/structure_guard.py --quiet --color never ."
 
 # 测试（unit + e2e；只跑快层用 -s tests/unit）
 TEST_CMD = 'python3 -m unittest discover -s tests -p "test_*.py"'

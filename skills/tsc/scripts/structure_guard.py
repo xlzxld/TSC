@@ -789,10 +789,15 @@ def _extract_hook_paths(obj, out):
 
 
 def hook_main():
-    """PostToolUse 钩子入口：stdin JSON -> 检查被编辑文件。
-    退出码遵循 ZCode hooks 协议：0=通过，2=拦截（报告走 stderr）。
+    """宿主 hook 入口（"AI 改完文件立刻查一遍"）：stdin JSON -> 检查被编辑文件。
+
+    退出码约定：0=通过，2=拦截（报告走 stderr）。任何支持
+    "工具调用后跑一条命令" 的宿主都可以把本模式接上去，请在宿主侧配置
+    `<技能根>/scripts/structure_guard.py --from-hook`，本技能不绑定任何平台。
+
     fail-open 原则：stdin 不是 JSON、路径拿不到、工具自身故障，一律 0 放行
     （闸 2/3 兜底），钩子自身绝不能变成打断工作的故障源。"""
+    _init_stdout()
     try:
         if sys.stdin.isatty():
             return 0
@@ -878,6 +883,16 @@ _SELFTEST = [
     ("js 嵌套模板插值不误报", "x.js",
      'const t = `${a.map((p) => `<o v="${p.id}">${esc(p.name)}（${p.k}）</o>`).join("")}`;\n', True),
     ("js 插值内失衡仍报", "x.js", "const x = `${f(}`;\n", False),
+    # 以下三类来自 A-08 实测（2026-09-23）：插值内的正则/注释/换行边界。
+    # 修复前那个 `'`（正则里的引号）被当成字符串开头，一路吃到 EOF 吞掉闭 `}`，
+    # 于是完全合法的文件被判成"字符串没闭合 + 括号没闭合"。
+    ("js 插值内正则含引号不误报", "x.js",
+     'const s = `${items.map(s => s.replace(/\'/g, "")).join(",")}`;\n', True),
+    ("js 插值内注释含引号不误报", "x.js", "const t = `${ /* don't */ x }`;\n", True),
+    ("js 插值内除号不误判正则", "x.js", "const u = `${a / 2}`;\n", True),
+    # 插值内"引号没配对"L1 刻意只停住不报（合法 JSX 文案里的撇号会被误伤），
+    # 真语法错误归 L2；此处固定"L1 放行"这一层口径，防止有人回头改成误报。
+    ("js 插值内串跨行（L1 不报，交 L2）", "x.js", 'const t = `${ "abc\n}`;\n', True),
     ("lisp 跨行字符串不误报", "x.lsp",
      '(defun f ()\n  (princ (strcat "\n【精雕】已将 " (itoa 1) " 个")))\n', True),
     ("yaml 内嵌 shell case 不误报", "x.yaml",
@@ -917,6 +932,7 @@ def selftest() -> int:
 
 def main(argv=None) -> int:
     global USE_COLOR
+    _init_stdout()
     ap = argparse.ArgumentParser(
         prog="structure_guard",
         description="AI 代码结构完整性统一门禁：L0 编码 / L1 平衡 / L2 结构 / L3 形态 / L4 断言。",
@@ -1042,10 +1058,25 @@ def main(argv=None) -> int:
     return exit_code_for(results)
 
 
+def _init_stdout():
+    """把标准输出/错误强制成 UTF-8。
+
+    本检查器所有输出都是中文。Windows 上控制台编码不一定是能编码中文的代码页：
+    英文版 runner / 英文 Windows 是 **cp1252**，`print("未闭合")` 会直接抛
+    `UnicodeEncodeError: 'charmap' codec can't encode ...`，进程以 rc=1 崩掉——
+    看起来像"检查器坏了"，实际只是打印不出来。
+
+    必须在**每个入口**里调用，不能只放在 `if __name__ == "__main__"`：宿主 hook、
+    单元测试都是 in-process 调用 `main()`，那条路径压根不走 `__main__` 分支
+    （CI 在 Windows 上实测撞到过：3 个用例因此报错）。
+    """
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            pass
+
+
 if __name__ == "__main__":
-    try:
-        sys.stdout.reconfigure(encoding="utf-8")
-        sys.stderr.reconfigure(encoding="utf-8")
-    except Exception:
-        pass
+    _init_stdout()
     sys.exit(main())

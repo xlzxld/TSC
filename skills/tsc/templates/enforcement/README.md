@@ -1,20 +1,20 @@
 # 执法包 (Enforcement)
 
-> **版本 v3.3.2** | 对应 `AGENTS.md` v3.3.2 的机械执法层：**文档管行为，钩子兜底线**。
+> **版本 v5.0.0** | 对应 `AGENTS.md` v5.0.0 的机械执法层：**文档管行为，钩子兜底线**。
 > **默认启用**：`tsc.py install` 会自动把本目录的模板落到下表位置，不需要手工拷贝。
 > 红线中可机器判定且已落地的项（密钥、提交格式、门禁、主干保护）在此落地；其余红线（如 R-3.1 吞异常、R-3.3 调试残留）由提示词纪律与人工审查兜底。
 
 ## 文件去向（`install` 自动完成）
 
-| 模板（技能目录） | 自动落到目标项目 | 作用 |
+| 模板（技能目录内） | 自动落到目标项目 | 作用 |
 |---|---|---|
-| `.agents/enforcement/gate.yml` | `.github/workflows/gate.yml` | PR / 主干 push 上的 CI 门禁（含结构门禁步骤）；`branches:` 按 §2「主干分支」自动填 |
-| `.agents/enforcement/.pre-commit-config.yaml` | 项目根（同名） | 本地 git 钩子：密钥扫描 + 提交信息规范 + 结构门禁（local 条目） |
-| `.agents/enforcement/commitlint.config.js` | 项目根 | Conventional Commits 规则 |
-| 根目录 `structure_guard.py` | `.agents/structure_guard.py` | 结构门禁落盘件：AI 代码结构完整性五层检查（括号/语法/缩进/形态） |
-| 根目录 `bracket_lint.py` | `.agents/bracket_lint.py` | 结构门禁的 L1 引擎（语言感知括号栈） |
+| `skills/tsc/templates/enforcement/gate.yml` | `.github/workflows/gate.yml` | PR / 主干 push 上的 CI 门禁（含结构门禁步骤）；`branches:` 按 §2「主干分支」自动填 |
+| `skills/tsc/templates/enforcement/.pre-commit-config.yaml` | 项目根（同名） | 本地 git 钩子：密钥扫描 + 提交信息规范 + 结构门禁（local 条目） |
+| `skills/tsc/templates/enforcement/commitlint.config.js` | 项目根 | Conventional Commits 规则 |
+| `skills/tsc/scripts/structure_guard.py` | `.agents/structure_guard.py` | 结构门禁落盘件：AI 代码结构完整性五层检查（括号/语法/缩进/形态） |
+| `skills/tsc/scripts/bracket_lint.py` | `.agents/bracket_lint.py` | 结构门禁的 L1 引擎（语言感知括号栈） |
 
-后两份来自技能根（不在本目录）：git 钩子与 CI 只认项目自己的文件，结构门禁必须落盘进项目才能在闸 2/3 生效。**聚合门禁本体不落盘**——由技能目录里的 `.agents/tsc.py verify` 承担（执行逻辑不进项目，由 AI 直接调用）。
+后两份来自技能目录的 `scripts/`（不在本目录）：git 钩子与 CI 只认项目自己的文件，结构门禁必须落盘进项目才能在闸 2/3 生效。**聚合门禁本体不落盘**——由技能目录里的 `scripts/tsc.py verify` 承担（执行逻辑不进项目，由 AI 直接调用）。
 
 ## 归属规则（tsc-managed 标记）
 
@@ -80,5 +80,12 @@ pre-commit install --hook-type commit-msg
 
 - 密钥扫描是**模式匹配**，自定义格式的内网域名、连接串需要自己加规则（gitleaks 的 `--config`），默认规则覆盖不到。
 - 本地钩子依赖 Node 与 Python 两个运行时；只在一个平台开发、且不想装的话，靠 CI 那层即可。
+- `.pre-commit-config.yaml` 里结构门禁条目的解释器名（`python3` / `python`）是 `install` / `sync`
+  时按**部署这台机器**探测后填入的，不是模板写死的值。原因：pre-commit 的 local 钩子只有
+  `language: system` 能跑项目内脚本，而 system 语言的 `entry` 首令牌**完全靠系统 PATH 解析**，
+  `python3`（macOS / 多数 Linux）与 `python`（Windows 常见）没有交集，写死哪个都只在半边平台成立。
+  换平台后重跑一次 `tsc sync` 即可自动校正（内容比对走同一套渲染逻辑，能自愈）。另两条路已实测
+  排除：`language: python` 会先对项目根 `pip install .`（没有 `setup.py` / `pyproject.toml` 即失败）；
+  `language: script` + 项目内 `sh` 启动器在 Windows 上报 `/bin/sh not found`。
 - `gate.yml` 的提交信息校验在 fork PR 上可能拿不到 base sha，此时该步会跳过；主干 push 与同仓库 PR 正常。
 - `gate.yml` 的 commitlint 在 `github.event.before` 为全零 SHA（新仓库首次推送等场景）时会因比对范围无效而报错（是显式报错，不是静默放行）；属极边缘场景。

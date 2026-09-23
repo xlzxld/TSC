@@ -1,8 +1,8 @@
 # 规范部署与适配生成器 (BOOTSTRAP.md)
 
-> **版本 v4.0.0** | 与 `templates/AGENTS.md` v4.0.0、`references/AUDIT-SPEC.md` 配套。
-> **单源原则**：本文件**不内嵌**契约模板。母版 = 插件目录 `templates/AGENTS.md`；执行逻辑常驻插件 `scripts/`，**不复制进项目**。契约只有一个真身，禁止再复制出第二份。
-> **使用方法**：由 AI 代跑 `python3 "<插件根>/scripts/tsc.py" install --project <项目根>`（建议先加 `--dry-run` 看变化），然后说"适配 / 初始化规范"；或直接说"读取通用母版，自动扫描当前项目，生成定制化 AGENTS.md。有无法确定的配置再问我。"
+> **版本 v5.0.0** | 与 `templates/AGENTS.md` v5.0.0、`references/AUDIT-SPEC.md` 配套。
+> **单源原则**：本文件**不内嵌**契约模板。母版 = 技能目录 `templates/AGENTS.md`；执行逻辑常驻技能 `scripts/`，**不复制进项目**。契约只有一个真身，禁止再复制出第二份。
+> **使用方法**：由 AI 代跑 `python3 "<技能根>/scripts/tsc.py" install --project <项目根>`（建议先加 `--dry-run` 看变化），然后说"适配 / 初始化规范"；或直接说"读取通用母版，自动扫描当前项目，生成定制化 AGENTS.md。有无法确定的配置再问我。"
 
 ---
 
@@ -32,7 +32,7 @@
 
 1. 用阶段 0 探测结果填充 AGENTS.md §2；探测不到的项如实写"无"或向用户提问，**禁止臆造**。
 2. 把同样的取值填进 `.agents/project.py`（四条命令变量），然后由 AI 代跑 `tsc.py check-config`——**§2 表格与 project.py 必须同源**，不一致会退出码 1，禁止只改一处。
-3. 校验（模式 A / B / C 均适用）：`wc -l AGENTS.md` < 80（LF 计）；`tsc.py verify` 在终端实测可执行（附退出码）。两命令均从 `<插件根>/scripts/tsc.py` 调用、以 `--project` 指向目标项目。
+3. 校验（模式 A / B / C 均适用）：`wc -l AGENTS.md` < 80（LF 计）；`tsc.py verify` 在终端实测可执行（附退出码）。两命令均从 `<技能根>/scripts/tsc.py` 调用、以 `--project` 指向目标项目。
 4. 目标项目存在基线失败（存量 lint 警告、跳过测试）时，登记进"已知豁免清单"行——**只登记，不放宽验证条件**。
 
 ## 阶段 4：完成反馈（如实陈述，禁止绝对化承诺）

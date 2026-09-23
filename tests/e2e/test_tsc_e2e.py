@@ -6,7 +6,7 @@
       非 git 安装副本提示走宿主更新。
 安全边界：无 marker 的外部 AGENTS.md 不被 sync/install 接管；--force 显式接管；
       有 marker 只更新托管内容；§2 结构变化仍拒绝自动合并；项目接管的执法包不覆盖。
-ZCode：plugin.json / hooks.json / SKILL 可发现（单测层覆盖静态约束，这里跑 CLI 真身）。
+技能打包：技能目录自包含、SKILL 可发现（单测层覆盖静态约束，这里跑 CLI 真身）。
 门禁：verify 超时杀进程组返回 124；退出码透传；假绿 rc=3；CI 内联壳与本地同判定。
 回滚：sync 后 rollback 恢复上一状态；无可回滚记录时报 3。
 """
@@ -23,7 +23,12 @@ import unittest
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
-SCRIPT = REPO / "scripts" / "tsc.py"
+SKILL = REPO / "skills" / "tsc"
+SCRIPT = SKILL / "scripts" / "tsc.py"
+
+# 跨平台门禁夹具：`true` / `sleep` 是 POSIX 专属，Windows 上没有（A-02）。
+QUICK_CMD = '"%s" -c "pass"' % sys.executable
+SLOW_CMD = '"%s" -c "import time;time.sleep(60)"' % sys.executable
 
 
 def run_script(*args, cwd=None):
@@ -42,7 +47,7 @@ def gate_inline_source():
     CI 聚合壳与本地 tsc.py 是"同一命令源的两套执行壳"，此抽取器让测试
     能直接执行 CI 侧真身，防止两套壳判定漂移。
     """
-    lines = (REPO / "templates" / "enforcement" / "gate.yml").read_text(encoding="utf-8").split("\n")
+    lines = (SKILL / "templates" / "enforcement" / "gate.yml").read_text(encoding="utf-8").split("\n")
     starts = [i for i, ln in enumerate(lines) if "<<'PYEOF'" in ln]
     assert len(starts) == 1, "gate.yml 应恰好含一个内联 Python heredoc"
     body = []
@@ -73,7 +78,9 @@ class E2EBase(unittest.TestCase):
         t = re.sub(r"\| 格式化 \(Format\) \|[^\n]*\|", "| 格式化 (Format) | 无 | ✅ 无差异 |", t, count=1)
         t = re.sub(r"\| 主干分支 \|[^\n]*\|", "| 主干分支 | main | ✅ 禁止直推 |", t, count=1)
         t = re.sub(r"\| 已知豁免清单 \|[^\n]*\|", "| 已知豁免清单 | 无 | 白名单 |", t, count=1)
-        t = re.sub(r"\| 测试 \(Test\) \|[^\n]*\|", "| 测试 (Test) | `%s` | ✅ 全绿 |" % test_cmd, t, count=1)
+        t = re.sub(r"\| 测试 \(Test\) \|[^\n]*\|",
+                   lambda _m: "| 测试 (Test) | `%s` | ✅ 全绿 |" % test_cmd,
+                   t, count=1)
         agents.write_text(t, encoding="utf-8")
         return agents
 
@@ -108,7 +115,7 @@ class InstallTests(E2EBase):
         self.assertIn("hashFiles('commitlint.config.js') != ''", gate)
         self.assertIn("不部署 commitlint", out)
         version = (self.tmp / ".agents" / "VERSION").read_text(encoding="utf-8").strip()
-        self.assertEqual(version, "4.0.0")
+        self.assertEqual(version, "5.0.0")
 
     def test_node_install_adds_commitlint(self):
         (self.tmp / "package.json").write_text('{"name": "x"}', encoding="utf-8")
@@ -143,8 +150,8 @@ class InstallTests(E2EBase):
         code, out = self.install()
         self.assertEqual(code, 0, out)
         record = json.loads((self.tmp / ".agents" / ".source").read_text(encoding="utf-8"))
-        self.assertEqual(record["source"], str(REPO))
-        self.assertEqual(record["version"], "4.0.0")
+        self.assertEqual(record["source"], str(SKILL))
+        self.assertEqual(record["version"], "5.0.0")
         self.assertIn("installed_at", record)
 
     def test_sync_same_state_is_noop(self):
@@ -174,7 +181,7 @@ class UpgradeTests(E2EBase):
         self.assertEqual(code, 0, out)
         agents = self.tmp / "AGENTS.md"
         text = agents.read_text(encoding="utf-8").replace("<!-- tsc-managed-contract:v4 -->\n\n", "")
-        text = text.replace("> **版本 v4.0.0**", "> **版本 v3.3.2**")
+        text = text.replace("> **版本 v5.0.0**", "> **版本 v3.3.2**")
         agents.write_text(text, encoding="utf-8")
         (self.tmp / ".agents" / "VERSION").write_text("3.3.2\n", encoding="utf-8")
         (self.tmp / ".agents" / ".source").write_text(
@@ -185,35 +192,37 @@ class UpgradeTests(E2EBase):
         self._make_v3_project()
         code, out = run_script("sync", "--project", str(self.tmp))
         self.assertEqual(code, 0, out)
-        self.assertIn("3.3.2 → 4.0.0", out)
+        self.assertIn("3.3.2 → 5.0.0", out)
         agents = (self.tmp / "AGENTS.md").read_text(encoding="utf-8")
         self.assertIn("<!-- tsc-managed-contract:v4 -->", agents)
-        self.assertEqual((self.tmp / ".agents" / "VERSION").read_text().strip(), "4.0.0")
+        self.assertEqual((self.tmp / ".agents" / "VERSION").read_text().strip(), "5.0.0")
         record = json.loads((self.tmp / ".agents" / ".source").read_text(encoding="utf-8"))
-        self.assertEqual(record["source"], str(REPO))  # 已修正为实际使用的上游
+        self.assertEqual(record["source"], str(SKILL))  # 已修正为实际使用的上游
 
     def test_source_pointing_to_other_upstream_does_not_win(self):
         """.source 即使指向一个"有效"的别的上游，也只是记录——裸 sync 仍用当前本体。"""
         other = self.tmp / "other-upstream"
         (other / "templates").mkdir(parents=True)
         (other / "VERSION").write_text("0.0.1\n", encoding="utf-8")
-        shutil.copyfile(REPO / "templates/AGENTS.md", other / "templates/AGENTS.md")
-        shutil.copyfile(REPO / "templates/project.example.py", other / "templates/project.example.py")
+        shutil.copyfile(SKILL / "templates/AGENTS.md", other / "templates/AGENTS.md")
+        shutil.copyfile(SKILL / "templates/project.example.py",
+                        other / "templates/project.example.py")
         code, _ = self.install()
         self.assertEqual(code, 0)
         (self.tmp / ".agents" / ".source").write_text(str(other) + "\n", encoding="utf-8")
         code, out = run_script("sync", "--project", str(self.tmp))
         self.assertEqual(code, 0, out)
         self.assertEqual(
-            (self.tmp / ".agents" / "VERSION").read_text().strip(), "4.0.0",
+            (self.tmp / ".agents" / "VERSION").read_text().strip(), "5.0.0",
             "裸 sync 后版本必须是当前本体的，不是 .source 指向的旧上游")
 
     def test_explicit_source_used_for_one_sync_then_repoints_provenance(self):
         other = self.tmp / "up"
         (other / "templates").mkdir(parents=True)
         (other / "VERSION").write_text("9.9.9\n", encoding="utf-8")
-        shutil.copyfile(REPO / "templates/AGENTS.md", other / "templates/AGENTS.md")
-        shutil.copyfile(REPO / "templates/project.example.py", other / "templates/project.example.py")
+        shutil.copyfile(SKILL / "templates/AGENTS.md", other / "templates/AGENTS.md")
+        shutil.copyfile(SKILL / "templates/project.example.py",
+                        other / "templates/project.example.py")
         code, _ = self.install()
         self.assertEqual(code, 0)
         code, out = run_script("sync", "--source", str(other), "--project", str(self.tmp))
@@ -224,7 +233,7 @@ class UpgradeTests(E2EBase):
         # 再裸 sync：回到当前本体
         code, out = run_script("sync", "--project", str(self.tmp))
         self.assertEqual(code, 0, out)
-        self.assertEqual((self.tmp / ".agents" / "VERSION").read_text().strip(), "4.0.0")
+        self.assertEqual((self.tmp / ".agents" / "VERSION").read_text().strip(), "5.0.0")
 
     def test_update_on_nongit_copy_reports_host_update_path(self):
         """规格 §10：没有 .git 的已安装副本 → 提示宿主升级机制，rc=3。
@@ -239,7 +248,7 @@ class UpgradeTests(E2EBase):
             ignore=shutil.ignore_patterns(".git", "__pycache__", ".agents", ".tsc-tmp"),
         )
         proc = subprocess.run(
-            [sys.executable, str(copy / "scripts" / "tsc.py"), "update"],
+            [sys.executable, str(copy / "skills" / "tsc" / "scripts" / "tsc.py"), "update"],
             capture_output=True,
         )
         out = (proc.stdout + proc.stderr).decode("utf-8", errors="replace")
@@ -377,8 +386,8 @@ class VerifyGateTests(E2EBase):
         """P1-05：卡死的门禁命令被超时终止，绝不无限等待。"""
         code, _ = self.install()
         self.assertEqual(code, 0)
-        self.set_project_py(self.tmp, "sleep 60")
-        self.adapt_section2(self.tmp, "sleep 60")
+        self.set_project_py(self.tmp, SLOW_CMD)
+        self.adapt_section2(self.tmp, SLOW_CMD)
         start = time.monotonic()
         code, out = run_script("verify", "--timeout", "1", "--project", str(self.tmp))
         elapsed = time.monotonic() - start
@@ -391,10 +400,10 @@ class VerifyGateTests(E2EBase):
         code, _ = self.install()
         self.assertEqual(code, 0)
         (self.tmp / ".agents" / "project.py").write_text(
-            'FMT_CHECK_CMD = None\nLINT_CMD = None\nTEST_CMD = "sleep 60"\nBUILD_CMD = None\n'
-            'GATE_TIMEOUTS = {"TEST_CMD": 1}\n',
+            'FMT_CHECK_CMD = None\nLINT_CMD = None\nTEST_CMD = %r\nBUILD_CMD = None\n'
+            'GATE_TIMEOUTS = {"TEST_CMD": 1}\n' % SLOW_CMD,
             encoding="utf-8")
-        self.adapt_section2(self.tmp, "sleep 60")
+        self.adapt_section2(self.tmp, SLOW_CMD)
         start = time.monotonic()
         code, out = run_script("verify", "--project", str(self.tmp))
         elapsed = time.monotonic() - start
@@ -410,6 +419,21 @@ class VerifyGateTests(E2EBase):
         self.adapt_section2(self.tmp, "echo t-ok")
         code, out = run_script("check-config", "--project", str(self.tmp))
         self.assertEqual(code, 0, out)
+
+    def test_gate_inline_shell_survives_non_utf8_console(self):
+        """CI 在 Windows 上抓到的真实缺陷：内联壳没强制 UTF-8，cp1252 下中文 print 崩掉。
+
+        退出码因此从 3（全未配置 = 假绿）变成 1——两套壳的判定就此漂移，
+        而本地 tsc.py 一直有这层兜底。用 PYTHONIOENCODING=cp1252 强制复现。
+        """
+        code, _ = self.install()
+        self.assertEqual(code, 0)
+        env = dict(os.environ)
+        env["PYTHONIOENCODING"] = "cp1252"
+        proc = subprocess.run([sys.executable, "-c", gate_inline_source()],
+                              cwd=str(self.tmp), capture_output=True, env=env)
+        self.assertEqual(proc.returncode, 3,
+                         (proc.stdout + proc.stderr).decode("utf-8", "replace")[-600:])
 
     def test_gate_inline_shell_matches_local(self):
         """CI 内联壳与本地 tsc.py 同判定：假绿 3 / 不一致 1 / 全绿 0。"""
@@ -503,6 +527,19 @@ class DoctorStatusTests(E2EBase):
         code, out = run_script("doctor", "--project", str(self.tmp))
         self.assertIn("不部署 commitlint", out)
 
+    def test_doctor_on_master_repo_does_not_flag_enforcement_missing(self):
+        """A-03：母版自举按设计不铺生效件，doctor 不得把这说成"执法包缺失"。
+
+        修复前母版自检永远弹 4 条黄标（gate.yml / pre-commit / 两份落盘检查器），
+        把"设计如此"报成"缺文件"——噪音会掩盖真问题。
+        """
+        code, out = run_script("sync", "--project", str(REPO))  # 自举生成 .agents/VERSION 等
+        self.assertEqual(code, 0, out)
+        code, out = run_script("doctor", "--project", str(REPO))
+        self.assertEqual(code, 0, out)
+        self.assertIn("按设计不铺生效件", out)
+        self.assertNotIn("缺失", out)
+
     def test_status_json_is_machine_readable(self):
         code, _ = self.install()
         self.assertEqual(code, 0)
@@ -510,13 +547,13 @@ class DoctorStatusTests(E2EBase):
         self.assertEqual(code, 0, out)
         data = json.loads(out)
         self.assertEqual(data["ownership"], "managed")
-        self.assertEqual(data["contract_version"], "4.0.0")
+        self.assertEqual(data["contract_version"], "5.0.0")
         self.assertTrue(data["installed"])
 
     def test_version_flag(self):
         code, out = run_script("--version")
         self.assertEqual(code, 0, out)
-        self.assertEqual(out.strip(), "4.0.0")
+        self.assertEqual(out.strip(), "5.0.0")
 
 
 if __name__ == "__main__":

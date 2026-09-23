@@ -53,8 +53,19 @@ jobs:
       - name: 聚合门禁 (fmt-check / lint / test / build)
         run: |
           python3 - <<'PYEOF'
-          import os, signal, subprocess, sys
+          import os, re, shutil, signal, subprocess, sys
           from pathlib import Path
+
+          # 控制台编码不一定是能编码中文的代码页（英文版 Windows runner 是 cp1252，
+          # 且输出重定向到管道时取的是区域代码页而不是 UTF-8）。本壳的提示语全是中文，
+          # 不强制 UTF-8 就会在第一条 print 上抛 UnicodeEncodeError 崩掉、退出码变成 1——
+          # 与本地 tsc.py 的判定直接漂移（CI 在 windows 上实测撞到过）。
+          # 本地 tsc.py 早就有这层兜底，两套壳必须一致。
+          for _stream in (sys.stdout, sys.stderr):
+              try:
+                  _stream.reconfigure(encoding="utf-8", errors="replace")
+              except (AttributeError, ValueError):
+                  pass
 
           cfg = Path(".agents/project.py")
           if not cfg.is_file():
@@ -146,12 +157,26 @@ jobs:
               ("构建 (Build)", "BUILD_CMD"),
           ]
           per_step = ns.get("GATE_TIMEOUTS") or {}
+
+          # 解释器回退：命令源里的 python / python3 / py 若在本 runner 上解析不到，
+          # 换成当前解释器。与本地 tsc.py 的 retarget_interpreter 同口径——
+          # 命令源必须是两处一致的静态字符串，所以只能在执行壳里兜这一层。
+          INTERP_HEAD = re.compile(
+              r'^(?P<indent>\s*)(?P<quote>"?)(?P<token>py|python[0-9.]*)(?P=quote)(?=\s|$)')
+          def retarget(cmd):
+              m = INTERP_HEAD.match(cmd or "")
+              if m is None or shutil.which(m.group("token")):
+                  return cmd
+              print(f"注意：解释器 {m.group('token')} 不在 PATH，已改用 {sys.executable}")
+              return '%s"%s"%s' % (m.group("indent"), sys.executable, cmd[m.end():])
+
           ran = 0
           for label, key in steps:
-              command = ns.get(key)
-              if command in (None, "", "skip"):
+              raw_command = ns.get(key)
+              if raw_command in (None, "", "skip"):
                   print(f"skip: {label}（未配置）")
                   continue
+              command = retarget(raw_command)
               timeout_s = per_step.get(key) or DEFAULT_TIMEOUT_S
               print(f"$ {command}（超时 {timeout_s}s）")
               kwargs = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if os.name == "nt" else {"start_new_session": True}
