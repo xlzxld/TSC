@@ -4,13 +4,10 @@
 安装时由 tsc.py 从本文件复制生成 project.py；生成后**上游永远不会覆盖它**。
 把下面四条改成你项目真实的命令即可；没有的项写 None。
 
-解释器不要写死 python / python3（平台陷阱）：直接用当前解释器，
-    import sys
-    PY = sys.executable
-    TEST_CMD = f'"{PY}" -m pytest -q'
-（sys.executable 是运行 tsc.py verify 的那个 Python，跨平台最稳。）
-
-注意：AGENTS.md 的 §2 表格与这里必须保持一致，否则 check-config 会报错。
+命令格式说明：
+    - 直接写项目通用命令（如 python3 -m pytest -q 或 npm test）。
+    - 跨平台兼容：若首令牌 python/python3 在当前系统 PATH 中不存在，tsc.py verify 会自动回退到当前解释器执行，无需手工拼接 sys.executable。
+    - 注意：AGENTS.md 的 §2 表格与这里登记的命令字面量必须保持完全一致，否则 check-config 会报错。
 """
 
 __all__ = ["FMT_CHECK_CMD", "LINT_CMD", "TEST_CMD", "BUILD_CMD"]

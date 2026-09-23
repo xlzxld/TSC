@@ -27,10 +27,16 @@ TSC/
 
 把技能装进宿主，任选一种（都不需要联网装依赖，纯标准库）：
 
-- **克隆（推荐，可用 `tsc update` 自升级）**：
-  `git clone https://github.com/xlzxld/TSC "<宿主技能目录>/tsc"`
-  （宿主技能目录举例：`~/.workbuddy/skills/`、`~/.claude/skills/`——按你所在平台的实际路径放。）
-- **拷贝**：直接把这个仓库（或只把 `skills/tsc/`）拷进宿主技能目录；非 git 副本无法 `tsc update`，升级靠重新拷贝。
+- **克隆并软链（推荐，支持 `tsc update` 自升级）**：
+  先克隆本仓库到本地工具目录，再将 `skills/tsc` 软链接到宿主技能目录：
+  ```bash
+  git clone https://github.com/xlzxld/TSC ~/tools/tsc-repo
+  ln -s ~/tools/tsc-repo/skills/tsc "<宿主技能目录>/tsc"
+  # Windows (PowerShell):
+  # New-Item -ItemType SymbolicLink -Path "<宿主技能目录>\tsc" -Target "$HOME\tools\tsc-repo\skills\tsc"
+  ```
+  （宿主技能目录举例：`~/.claude/skills/`、`~/.gemini/antigravity/skills/`、`~/.workbuddy/skills/`——按你所在平台的实际路径放。）
+- **直接拷贝**：把仓库内的 `skills/tsc/` 目录整体拷贝进宿主技能目录，命名为 `tsc`（非 git 副本无法使用 `tsc update`，升级靠重新拷贝）。
 - **宿主插件市场**：如果宿主支持"添加插件市场"，填本仓库地址也行（本仓库不含平台私有清单，能否识别取决于宿主）。
 
 装好后对 AI 说一句话（无需敲命令）：

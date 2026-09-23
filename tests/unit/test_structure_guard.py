@@ -140,6 +140,29 @@ class CliTests(unittest.TestCase):
             self.assertEqual(sg.main([os.path.join(ROOT, rel), "--quiet",
                                       "--color", "never"]), 0, rel)
 
+    def test_stdin_broken_bracket_exits_1(self):
+        # B-01：stdin 管道输入不平衡代码必须真实拦截（退出码 1），不能因二次读空而假绿
+        rc = subprocess.run(
+            [sys.executable, os.path.join(SCRIPTS, "structure_guard.py"), "--lang", "py", "-"],
+            input="def foo(\n", capture_output=True, text=True, encoding="utf-8")
+        self.assertEqual(rc.returncode, 1)
+        self.assertIn("unclosed", rc.stdout)
+
+    def test_stdin_syntax_error_exits_1(self):
+        # B-01/B-05：stdin 管道输入括号平衡但语法错误时，L2 正确分派并拦截（退出码 1）
+        rc = subprocess.run(
+            [sys.executable, os.path.join(SCRIPTS, "structure_guard.py"), "--lang", "py", "-"],
+            input="x = 1 + * 2\n", capture_output=True, text=True, encoding="utf-8")
+        self.assertEqual(rc.returncode, 1)
+        self.assertIn("syntax-error", rc.stdout)
+
+    def test_extensionless_script_runs_l2_syntax_check(self):
+        # B-05：无扩展名脚本根据 shebang 触发 L2 语法检查，不能静默放行
+        res = sg.check_source("my_cli", "#!/usr/bin/env python3\nx = 1 + * 2\n", real_file=False)
+        self.assertFalse(res["ok"])
+        self.assertTrue(any(i["layer"] == "L2" and i["code"] == "syntax-error" for i in res["issues"]))
+
+
     def _run_hook(self, stdin_text):
         return subprocess.run(
             [sys.executable, os.path.join(SCRIPTS, "structure_guard.py"), "--from-hook"],

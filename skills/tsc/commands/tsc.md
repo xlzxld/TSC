@@ -12,4 +12,4 @@ TSC 总入口。先执行
 - "更新 TSC" / "升级 TSC" → /tsc-update
 - "升级 TSC，并同步当前项目" → 先 /tsc-update，再 /tsc-sync，最后 `check-config` + `verify`，汇报完整升级链
 - "回滚契约" → `python3 <技能根>/scripts/tsc.py rollback --project <当前项目根>`
-- "体检" / "audit" → 读本插件的 `skills/tsc/references/AUDIT-SPEC.md`，只读扫描后停下等确认
+- "体检" / "audit" → 读 <技能根>/references/AUDIT-SPEC.md，只读扫描后停下等确认

@@ -574,6 +574,13 @@ class SkillPackagingTests(unittest.TestCase):
         # P2-07：本体升级与项目同步是两个入口，互不越界
         self.assertIn("不要", update_cmd + sync_cmd)
 
+    def test_commands_paths_valid(self):
+        # B-04：commands 中的引用路径应使用 <技能根> 或相对于技能根的有效路径
+        tsc_cmd = tsc.read_text(SKILL / "commands/tsc.md")
+        self.assertNotIn("skills/tsc/references", tsc_cmd)
+        self.assertIn("<技能根>/references/AUDIT-SPEC.md", tsc_cmd)
+
+
     def test_no_hardcoded_proxy_anywhere_user_facing(self):
         # P2-02：公共仓库绝不绑定作者本机代理端口
         for rel in ("README.md", "skills/tsc/SKILL.md",

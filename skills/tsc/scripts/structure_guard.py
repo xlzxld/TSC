@@ -497,6 +497,18 @@ L2_BY_EXT = {
     ".ps1": check_powershell,
 }
 
+# L2 语言兜底（用于无扩展名文件/标准输入/显式 --lang 覆盖）
+L2_BY_LANG = {
+    "py": check_python,
+    "json": check_json,
+    "toml": check_toml,
+    "yaml": check_yaml,
+    "js": check_node,
+    "sh": check_bash,
+    "rb": check_ruby,
+    "go": check_gofmt,
+}
+
 SUPPORTED_EXTS = set(bracket_lint.EXT_MAP) | set(EXTRA_EXT)
 
 
@@ -538,6 +550,7 @@ def check_source(label, src, lang=None, max_issues=5, real_file=True):
            "issues": [], "degraded": [], "tool_error": None, "suggestion": "",
            "exempted": 0}
 
+    lang_explicit = lang is not None
     if lang is None:
         ext = os.path.splitext(label)[1].lower()
         if ext in DOC_EXTS:
@@ -577,9 +590,12 @@ def check_source(label, src, lang=None, max_issues=5, real_file=True):
     # L2 结构层
     ext = os.path.splitext(label)[1].lower()
     checker = L2_BY_EXT.get(ext)
+    if not checker and (not ext or lang_explicit) and lang:
+        checker = L2_BY_LANG.get(lang)
     if checker and not big:
-        if not real_file and getattr(checker, "needs_real_file", False):
-            res["degraded"].append("自检模式：跳过外部命令深检")
+        is_real = real_file and label != "-" and os.path.exists(label)
+        if not is_real and getattr(checker, "needs_real_file", False):
+            res["degraded"].append("自检/管道模式：跳过外部命令深检")
         else:
             try:
                 issue, terr, deg = checker(label, src)
@@ -622,7 +638,7 @@ def read_source(path):
             return None, None, "读不了 %s: %s" % (path, e)
     if b"\x00" in data[:8192]:
         return None, "binary", None
-    return bracket_lint.read_text(path) if path == "-" else _decode(data), None, None
+    return _decode(data), None, None
 
 
 def _decode(data: bytes) -> str:
@@ -899,6 +915,7 @@ _SELFTEST = [
      "run: |\n  case \"$f\" in *.py) echo $f ;; esac\n", True),
     ("yaml 裸标量全角不误报", "x.yaml", "title: 我的（备用）方案\n", True),
     ("vue 标记文件跳过", "x.vue", "<div>（中文文案）{{ msg }}</div>\n", True),
+    ("无后缀脚本 shebang 语法错误(L2)", "my_script", "#!/usr/bin/env python3\nx = 1 + * 2\n", False),
 ]
 
 # 伪路径下 L1 的 plain profile 未闭合串不报警——md 用例依赖 skipped 分支，不受影响
