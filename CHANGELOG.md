@@ -1,6 +1,6 @@
 # 变更记录 (CHANGELOG)
 
-## 未发版（main）
+## v5.0.0（2026-09-23）
 
 **依据**：外部体检报告的逐条核实 + 用户要求"要通用技能，不要单一平台专属技能"。报告 11 条里 **6 条成立、3 条证据有误或定级虚高、2 条属主观建议**（逐条核实结论见文末）。
 
@@ -34,16 +34,26 @@
 | 2 | `doctor` 的"本体更新通道"只看 `<技能根>/.git`，母版布局（`.git` 在仓库根）被误报"非 git 安装"、`tsc update` 被谎称不可用 | 新增 `git_worktree_of()` 逐级上溯找 git 工作树；`doctor` 与 `update` 共用 |
 | 3 | e2e 夹具 `adapt_section2` 用 `re.sub` 拼替换串，Windows 路径的反斜杠被当成转义（`re.PatternError: bad escape \U`） | 改用函数替换，结果一律按字面量处理 |
 
+### 补上母版自身的多平台回归线（原 A-06）
+
+| # | 变更 | 文件 |
+|---|---|---|
+| 1 | 新增 `.github/workflows/ci.yml`：`ubuntu` + `windows` + `macos` 三平台跑同一套门禁（两个自检 + `verify` + `check-config`），`fail-fast: false` 免得一个平台红掩盖另一个平台的信息 | `.github/workflows/ci.yml` |
+| 2 | 与托管的 `gate.yml` **刻意分开**：不同文件名、不在 `ENFORCE_DEPLOY`、不带 `tsc-managed` 标记，`install`/`sync` 不碰它。母版"不部署自己的执法包"这条设计不变量保持不变 | 同上 |
+| 3 | 契约预算改为自动断言（原来只写在发版清单里手敲）：行数 < 80、规则数 ≤ 30，母版与实例一并受检 | `tests/unit/test_tsc_unit.py` |
+
 ### 未采纳（登记备查，附理由）
 
-- **A-06（母版无 CI）**：事实存在，但**属刻意设计**——母版不铺执法包，避免出现第二份真身（有测试锁定）。报告称"漏做"不准确。代价真实：只在 Windows 暴露的问题拦不住。**建议另加独立命名的多平台工作流**（`ubuntu` + `windows` + `macos`，与托管的 `gate.yml` 分开），本轮未做，等用户决定。
+- **A-06 原判"母版无 CI 是漏做"**：措辞不准确——母版不部署自己的执法包是**刻意设计**（避免第二份真身，有测试锁定）。但"缺多平台回归线"这个代价是真的，已按上表补上。
 - **A-07（gate.yml 编码 / 超时收割）**：乱码现象属实但**归因错误**——`gate.yml` 只跑 `ubuntu-latest`，不存在 Windows 编码问题；乱码来自本地 `cmd.exe` 输出被 UTF-8 解码，属采集层。价值低，未改。
 - **A-10（taskkill 换 Windows Job Object）**：优化建议而非缺陷；现有实现已有单进程终止兜底，超时结论不受影响。
 - **A-11（`tsc.py` 拆模块）**：主观架构意见，与"零依赖单文件最好分发"的既有取舍冲突。
 
 ### 版本说明
 
-本轮改动落在 `main`（走 PR），**未 bump `skills/tsc/VERSION`**：只改内容、不发版。存量项目跑一次 `sync` 即按内容漂移拿到新模板，`doctor` 不会因版本号报警。要发版时由维护者 bump 版本并给本节补上版本号。
+- **v4.0.0 → v5.0.0（major）**：发行形态破坏性变更——平台专属外壳移除、技能目录重排、`<仓库根>/scripts/` 路径不再存在。用平台市场装的副本需要改用"克隆/拷贝技能目录"；存量项目跑一次 `sync` 即可。
+- **契约标记代次仍为 `v4`**（`<!-- tsc-managed-contract:v4 -->`）。它是**契约格式代次**，不是发行号：契约条款与 §2 结构本轮没变，所以不动它——改了会让存量项目的 marker 认不出来，等于把所有下游项目误判成"外部 AGENTS.md"而拒绝同步。
+- 三处版本头（母版 `AGENTS.md`、`AUDIT-SPEC.md`、`BOOTSTRAP.md`）与执法包 README 同批更新；版本真源仍只有 `skills/tsc/VERSION` 一处。
 
 **本轮实测**：148 用例全绿（`python -m unittest discover -s tests -p "test_*.py"` rc=0）｜`tsc.py verify` rc=0（真实执行 LINT + TEST）｜`check-config` rc=0｜`doctor` rc=0（10 通过 / 0 警告 / 0 失败）｜结构门禁自检 35/35｜bracket_lint 自检 30/30｜`wc -l AGENTS.md` = 74 与母版一致。
 

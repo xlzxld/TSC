@@ -1,6 +1,6 @@
 # 全项目体检执行细则 (AUDIT-SPEC.md)
 
-> **版本 v4.0.0** | 与 `templates/AGENTS.md` v4.0.0 配套；本文件位于技能 `skills/tsc/references/` 目录。
+> **版本 v5.0.0** | 与 `templates/AGENTS.md` v5.0.0 配套；本文件位于技能 `skills/tsc/references/` 目录。
 > 定位：**按需只读加载**。仅当用户发出"体检 / audit / 扫一下代码"时由 AI 读取。
 > 铁律：**本轮绝对只读，严禁修改、删除任何文件，严禁运行任何写命令。**
 

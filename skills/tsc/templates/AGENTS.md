@@ -2,7 +2,7 @@
 
 <!-- tsc-managed-contract:v4 -->
 
-> **版本 v4.0.0** | 本文件由 TSC 技能托管、随本体升级分发，并与 `AUDIT-SPEC.md` / `BOOTSTRAP.md` 同批修订。
+> **版本 v5.0.0** | 本文件由 TSC 技能托管、随本体升级分发，并与 `AUDIT-SPEC.md` / `BOOTSTRAP.md` 同批修订。
 > **唯一标准契约**：所有 AI 编码助手（Claude Code、Cursor、Copilot、Windsurf 等）进入本项目的入口。**注意力预算**：常驻仅本文件（< 80 行 / ≤2000 token / ≤30 条规则，`wc -l` LF 计）；深度细则按需加载；可机器执法的交给 hooks / CI，不占提示词预算。
 
 ---

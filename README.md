@@ -89,16 +89,18 @@ python3 "$SK/scripts/tsc.py" rollback    --project <项目根>   # 撤销最近�
 2. 在仓库根跑 `python3 skills/tsc/scripts/tsc.py sync --project .` 自举（生成 gitignore 掉的 `.agents/VERSION`/`.source`，根 AGENTS.md 与模板校验零漂移）。
 3. `CHANGELOG.md` 顶部记一笔。
 4. 门禁：`wc -l AGENTS.md` < 80；`python3 skills/tsc/scripts/tsc.py verify` 退出码 0（含 unit + e2e）。
-5. 提交走 Conventional Commits；标签用扁平名（`v4.0.0`）。
+5. 提交走 Conventional Commits；标签用扁平名（`v5.0.0`）。
 
 ## 平台支持（如实记录）
 
-- **macOS**：v4.0.0 发布平台，已实测。
-- **Linux**：标准库实现，无平台专属调用；CI（`gate.yml`）跑在 `ubuntu-latest`。
-- **Windows**：v3.x 实测过核心同步逻辑；v4.0.0 重组后已修掉一批 Windows 专属问题（测试夹具里的 POSIX 命令、CI 壳与 pre-commit 模板写死 `python3`、`doctor` 自举误报、worktree/submodule 定位），本机实测 `verify` 退出码 0。**尚缺**真正的多平台 CI 矩阵——见下方"已知缺口"。
+- **macOS**：v4.0.0 起为发布平台，已实测。
+- **Linux**：标准库实现，无平台专属调用。
+- **Windows**：v3.x 实测过核心同步逻辑；v5.0.0 起修掉一批 Windows 专属问题（测试夹具里的 POSIX 命令、模板写死 `python3`、`doctor` 自举误报、worktree/submodule 定位、反斜杠进 `re.sub`），本机实测 `verify` 退出码 0。
+- **三平台自动回归**：`.github/workflows/ci.yml` 在 `ubuntu` + `windows` + `macos` 上跑同一套门禁（见下）。
 
 ## 已知缺口（诚实登记）
 
-- 本仓库自身不跑 CI（刻意如此：母版不部署自己的执法包，避免出现第二份真身）。代价是**只在 Windows 暴露的问题拦不住**——A-02 那批测试缺陷就是这样漏进主干的。补一个独立命名的多平台工作流（`ubuntu` + `windows` + `macos`）是下一步，不与托管的 `gate.yml` 冲突。
+- 母版自带的多平台 CI（`ci.yml`）只覆盖**测试与门禁**；母版本身仍不部署自己的执法包（`gate.yml`）——那是刻意设计，避免出现第二份真身。两者文件名不同、互不干扰。
 - `tsc.py` 单文件约 1500 行，聚合了 CLI、所有权判定、配置比对、原子写、进程管理。当前取舍是"零依赖单文件最好分发"；若长期迭代，值得按数据模型 / 执行引擎 / 文件系统接口分层。
 - Windows 超时终止依赖外部 `taskkill.exe`（不可用时退回单进程终止，超时结论不受影响）。理论上可换 Windows 原生 Job Object 做到零残留，属优化而非缺陷。
+- 插值内"引号没配对"这类**语法**错误由 L2（`node --check` / `ast`）负责，L1 刻意不报——报它会把合法 JSX 文案里的撇号误伤。`node` 缺席时该层降级放行，属已知限制。

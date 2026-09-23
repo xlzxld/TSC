@@ -525,7 +525,7 @@ class SkillPackagingTests(unittest.TestCase):
         token = "zc" + "ode"
         marker = "${" + "zc" + "ode_plugin_root}"
         files = [REPO / "README.md", REPO / "AGENTS.md"]
-        for base in (SKILL, REPO / "tests"):
+        for base in (SKILL, REPO / "tests", REPO / ".github"):
             files.extend(p for p in sorted(base.rglob("*")) if p.is_file())
         for path in files:
             if "__pycache__" in path.parts:
@@ -569,7 +569,24 @@ class SkillPackagingTests(unittest.TestCase):
                          tsc.read_text(REPO / ".agents" / "VERSION").strip() !=
                          tsc.upstream_version(SKILL),
                          ".agents/VERSION 若存在必须与技能 VERSION 一致")
-        self.assertEqual(tsc.upstream_version(SKILL), "4.0.0")
+        self.assertEqual(tsc.upstream_version(SKILL), "5.0.0")
+
+    def test_contract_line_budget(self):
+        """契约行数预算：母版与实例都必须 < 80 行（`wc -l` LF 口径）。
+
+        A-09 的教训：只剩 1 行余量时，任何一条新规则都会直接撞门禁。把它变成自动
+        断言，比发版清单里手敲一次 `wc -l` 靠谱——手敲的到不了 CI。
+        """
+        for rel in ("AGENTS.md", "skills/tsc/templates/AGENTS.md"):
+            lines = tsc.read_text(REPO / rel).count("\n")
+            self.assertLess(lines, 80, "%s 已 %d 行，超出 80 行预算" % (rel, lines))
+
+    def test_contract_rule_budget(self):
+        """行数头注里同时声明了"≤30 条规则"，一并锁住，防止只盯行数。"""
+        text = tsc.read_text(SKILL / "templates/AGENTS.md")
+        rules = sorted(set(re.findall(r"\bR-\d+\.\d+\b", text)))
+        self.assertLessEqual(len(rules), 30, "规则数 %d 超预算：%s" % (len(rules), rules))
+        self.assertGreaterEqual(len(rules), 15, "规则数异常偏少，可能编号被改坏：%s" % rules)
 
 
 class EnforcementTemplateTests(unittest.TestCase):
@@ -586,6 +603,26 @@ class EnforcementTemplateTests(unittest.TestCase):
             self.assertNotRegex(ln, r"uses: \S+@v\d+", "浮动 tag：%s" % ln)
             self.assertRegex(ln, r"[0-9a-f]{40}", "未钉 SHA：%s" % ln)
         self.assertIn("@commitlint/cli@21.2.2", gate)
+
+    def test_ci_workflow_is_multiplatform_and_shipped_unmanaged(self):
+        """母版自身的 CI：三平台矩阵 + 供应链钉 SHA（与 gate.yml 同一套标准）。
+
+        它刻意不叫 gate.yml、也不带 tsc-managed 标记——母版不部署自己的执法包，
+        这条工作流是维护者手工维护的独立回归线。
+        """
+        text = tsc.read_text(REPO / ".github/workflows/ci.yml")
+        for os_name in ("ubuntu-latest", "windows-latest", "macos-latest"):
+            self.assertIn(os_name, text)
+        uses_lines = [ln.strip() for ln in text.splitlines()
+                      if "uses:" in ln and not ln.strip().startswith("#")]
+        self.assertTrue(uses_lines)
+        for ln in uses_lines:
+            self.assertNotRegex(ln, r"uses: \S+@v\d+", "浮动 tag：%s" % ln)
+            self.assertRegex(ln, r"[0-9a-f]{40}", "未钉 SHA：%s" % ln)
+        self.assertIn("tsc.py verify", text)
+        # 用 is_marker_line 的真语义判"声明"，不做子串匹配——本文件注释里**提到**了
+        # 托管标记，子串判断会把说明误判成声明（与"提及 ≠ 声明"同一类坑）。
+        self.assertFalse(tsc.has_marker(text, tsc.MANAGED_MARKER), "母版 CI 不是托管落盘件")
 
     def test_gate_yml_commitlint_condition_only_uses_commitlint_file(self):
         # P1-04：Python-only 项目（没有 commitlint.config.js）绝不触发 npm 安装

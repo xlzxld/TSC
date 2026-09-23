@@ -1,6 +1,6 @@
 # 规范部署与适配生成器 (BOOTSTRAP.md)
 
-> **版本 v4.0.0** | 与 `templates/AGENTS.md` v4.0.0、`references/AUDIT-SPEC.md` 配套。
+> **版本 v5.0.0** | 与 `templates/AGENTS.md` v5.0.0、`references/AUDIT-SPEC.md` 配套。
 > **单源原则**：本文件**不内嵌**契约模板。母版 = 技能目录 `templates/AGENTS.md`；执行逻辑常驻技能 `scripts/`，**不复制进项目**。契约只有一个真身，禁止再复制出第二份。
 > **使用方法**：由 AI 代跑 `python3 "<技能根>/scripts/tsc.py" install --project <项目根>`（建议先加 `--dry-run` 看变化），然后说"适配 / 初始化规范"；或直接说"读取通用母版，自动扫描当前项目，生成定制化 AGENTS.md。有无法确定的配置再问我。"
 

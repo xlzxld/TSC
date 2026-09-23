@@ -1,0 +1,46 @@
+# 母版仓库自身的回归线 —— 与托管落盘件 .github/workflows/gate.yml 刻意分开：
+# 母版不部署自己的执法包（避免出现第二份真身），但仍需要一条**多平台**的回归线。
+# 代价在 v5.0.0 之前是真实存在的：只有在 Windows 暴露的问题（测试夹具里的 POSIX
+# 命令、写死的 python3、反斜杠进 re.sub）拦不住，就是这么漏进主干的。
+#
+# 本文件由维护者手工维护：它不在 ENFORCE_DEPLOY 里，install/sync 不会碰它，
+# 也不带 tsc-managed 标记（不是托管落盘件）。
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  gate:
+    strategy:
+      fail-fast: false          # 一个平台红不要掩盖另一个平台的信息
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+
+      # 两个检查器各自的用例表（结构门禁 35 例 / 括号引擎 30 例）
+      - name: 结构门禁自检
+        run: |
+          python skills/tsc/scripts/structure_guard.py --selftest
+          python skills/tsc/scripts/bracket_lint.py --selftest
+
+      # 聚合门禁：读 .agents/project.py（唯一命令源）逐条执行，含 §2 ✓project.py 同源校验。
+      # 这里用技能目录里的 tsc.py 而不是内联壳——本仓库自己有技能目录。
+      # ⚠️ 命令源里登记的是 python3：Windows runner 上它可能解析不到，
+      #    正好借这条线持续验证"解释器回退"真的生效（A-01）。
+      - name: 聚合门禁 (verify)
+        run: python skills/tsc/scripts/tsc.py verify --project .
+
+      - name: 同源校验 (check-config)
+        run: python skills/tsc/scripts/tsc.py check-config --project .
+
+      # 不额外加"母版自举不铺执法包"这一步：它已由 verify 内的
+      # tests/unit/test_tsc_unit.py::test_self_target_skips_enforcement 断言，
+      # 而 `doctor` 的退出码只看 fail 不看 warn，在这里断言不了该不变量（会变成假绿）。
