@@ -293,6 +293,25 @@ class EnforceActionsTests(unittest.TestCase):
         self.assertNotIn("@commitlint", text)
         self.assertIn("gitleaks", text)
 
+    def test_deployed_precommit_guard_entry_uses_resolvable_interpreter(self):
+        """A-05：落盘件里的解释器名必须在本机解析得到，否则闸 2 开箱就坏。
+
+        模板给的是默认值，真正可用的名字由 `install / sync` 按本机探测后填入——
+        所以这里断言的不是某个具体名字，而是「解析得到」这个不变量
+        （Windows 上是 python，macOS/Linux 上是 python3，都对）。
+        """
+        import shutil
+        if tsc.pick_precommit_interpreter() is None:
+            self.skipTest("本机既无 python3 也无 python，无法验证探测结果")
+        tsc.deploy_enforcement(self.tmp, SKILL, AGENTS_SAMPLE, dry_run=False)
+        content = tsc.read_text(self.tmp / ".pre-commit-config.yaml")
+        entries = [ln.strip() for ln in content.splitlines()
+                   if ln.strip().startswith("entry:")]
+        self.assertTrue(entries)
+        for ln in entries:
+            token = ln.split(":", 1)[1].strip().split()[0]
+            self.assertTrue(shutil.which(token), "落盘件首令牌本机解析不到：%s" % ln)
+
     def test_node_project_precommit_keeps_npx(self):
         (self.tmp / "package.json").write_text("{}", encoding="utf-8")
         tsc.deploy_enforcement(self.tmp, SKILL, AGENTS_SAMPLE, dry_run=False)
@@ -641,23 +660,30 @@ class EnforcementTemplateTests(unittest.TestCase):
                 self.assertRegex(ln, r"rev: [0-9a-f]{40}", ln)
         self.assertIn("# v8.30.1", text)
 
-    def test_precommit_entry_does_not_hardcode_python3(self):
-        """A-05：entry 里不许写死 `python3`——Windows 上根本没有这个名字。
+    def test_precommit_template_uses_system_language(self):
+        """A-05 的最终结论：pre-commit 的 local 钩子只能用 `language: system`。
 
-        `language: system` 不建隔离环境，entry 的首令牌直接由系统 PATH 解析；
-        Windows 的 venv / 官方安装器只给 `python.exe`（本机实测：venv 里只有
-        python.exe 与 pythonw.exe，没有 python3）。改用 `language: python` 后由
-        pre-commit 自建环境并调用该环境里的解释器，跨平台一致（官方文档：python
-        钩子在 linux / macOS / windows / cygwin 上均受支持，无需系统级依赖）。
+        另两条路都实测排除了（2026-09-23 对照实验）：
+        - `language: python`：pre-commit 会先对项目根执行 `pip install .`，没有
+          setup.py / pyproject.toml 的项目直接
+          `ERROR: Directory '.' is not installable` —— 所有平台一起坏；
+        - `language: script` + 项目内 sh 启动器：Windows 上报
+          `Executable '/bin/sh' not found`。
+
+        而 system 语言的 entry 首令牌**完全靠系统 PATH 解析**，python3 / python
+        各平台不齐，静态写死哪个都只在半边平台成立 → 名字改由部署时探测填入
+        （见 `pick_precommit_interpreter`）。
         """
         text = tsc.read_text(SKILL / "templates/enforcement/.pre-commit-config.yaml")
-        entry_lines = [ln.strip() for ln in text.splitlines()
-                       if ln.strip().startswith("entry:")]
-        self.assertTrue(entry_lines, "模板里应有 entry")
-        for ln in entry_lines:
-            self.assertNotIn("python3", ln, "写死 python3 在 Windows 上不可解析：%s" % ln)
-        self.assertIn("language: python", text)
+        # 只看**生效指令行**：注释里会解释"为什么不用 language: python"，
+        # 子串判断会把说明误判成声明（"提及 ≠ 声明"那个坑的又一次实例）。
+        # 注意 commitlint 条目也是 system（两个钩子都用 system 才正常）。
+        active = [ln.strip() for ln in text.splitlines()
+                  if ln.strip().startswith("language:")]
+        self.assertTrue(active, "模板里应有 language: 指令行")
+        self.assertEqual(set(active), {"language: system"}, active)
         self.assertIn("structure_guard", text)
+        self.assertIn(tsc.PRE_COMMIT_GUARD_ENTRY, text, "模板应保留默认 entry")
 
     def test_enforcement_templates_carry_managed_marker(self):
         for rel in ("skills/tsc/templates/enforcement/gate.yml",

@@ -125,6 +125,34 @@ def has_marker(content, marker):
 NODE_REGION_BEGIN = "# tsc:begin:node-only"
 NODE_REGION_END = "# tsc:end:node-only"
 
+# --------------------------------------------------------------------------- #
+# pre-commit 结构门禁钩子的解释器名：部署时按**本机**探测填，不写死模板。
+#
+# 为什么必须这样（2026-09-23 对照实验，四种写法逐一实测）：
+#   - pre-commit 的 `repo: local` 里，只有 `language: system` 能跑项目内脚本；
+#     system 语言的 entry 首令牌**完全靠系统 PATH 解析**。而解释器名各平台不齐：
+#     macOS / 多数 Linux 只有 `python3`，Windows 常见只有 `python`。写死任何一个，
+#     另一平台就是 `Executable 'pythonX' not found` → 提交被堵住。
+#   - `language: python` 看着能跨平台，实测**不可用**：pre-commit 会先对项目根
+#     执行 `pip install .`，没有 setup.py / pyproject.toml 的项目直接
+#     `ERROR: Directory '.' is not installable` → 所有平台一起坏。
+#   - `language: script` + 项目内 sh 启动器同样不可用：Windows 上报
+#     `Executable '/bin/sh' not found`。
+# 结论：模板只能给个默认值，真正可用的名字由 install/sync 时探测后填进落盘件。
+# 副作用是"在 A 机器部署、换到 B 平台用"会残留 A 的名字——重跑一次 sync 即校正；
+# sync 的内容比对按同一套渲染逻辑算，所以能自愈。
+PRE_COMMIT_INTERPRETERS = ("python3", "python")   # 探测顺序 = 优先级
+PRE_COMMIT_GUARD_ENTRY = ("python3 .agents/structure_guard.py "
+                          "--staged --quiet --color never")
+
+
+def pick_precommit_interpreter():
+    """挑一个本机能解析到的解释器名；都没有则 None（保持模板默认）。"""
+    for name in PRE_COMMIT_INTERPRETERS:
+        if shutil.which(name):
+            return name
+    return None
+
 DEFAULT_TIMEOUT_S = 600
 
 # 门禁超时可在项目 project.py 里按步覆盖：GATE_TIMEOUTS = {"TEST_CMD": 300}
@@ -459,6 +487,14 @@ def enforce_template_content(rel_src, proj_root, upstream, merged_agents_text):
     if not is_node_project(proj_root):
         # 非 Node 项目：剔除 Node 专属区块（commitlint 整文件已在部署清单里排除）
         content = strip_node_regions(content)
+    if rel_src.endswith(".pre-commit-config.yaml"):
+        picked = pick_precommit_interpreter()
+        if picked and picked != PRE_COMMIT_INTERPRETERS[0]:
+            # 本机只认 `python`（典型 Windows）→ 把 entry 首令牌换成能解析的那个名
+            content = content.replace(
+                PRE_COMMIT_GUARD_ENTRY,
+                picked + PRE_COMMIT_GUARD_ENTRY[len(PRE_COMMIT_INTERPRETERS[0]):],
+            )
     return content
 
 

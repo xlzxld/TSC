@@ -22,7 +22,7 @@
 | A-08 | JS 模板串插值内按 JS 词法逐层吃：先跳注释（`//`、`/* */`），再按主扫描同款判据识别正则字面量，并给引号串加"裸换行即中止"边界 | 修复前**完全合法**的 `s.replace(/'/g, "")` 被测出 3 处结构问题（rc=1）；修复后 rc=0。真 SyntaxError 仍由 L2（`node --check`）拦住 |
 | A-03 | `is_self_bootstrap()` 抽为唯一判据，`doctor` 与 `_enforce_actions` 共用；母版自检不再谎报 4 项"执法包缺失" | `doctor`：修复前 9 通过 / **1 警告（4 条假缺失）**，修复后 **10 通过 / 0 警告 / 0 失败** |
 | A-04 | `install_hook.find_git_dir()` 支持 `.git` 是文件：解析 `gitdir:` 指针，再过 `commondir` 落到**公共** git 目录——worktree 的钩子装在公共目录才生效，写进 `.git/worktrees/<名>/hooks` 是白写 | 新增 6 条测试：普通仓库 / worktree / submodule / 坏指针 / 目录不存在 / 端到端装-卸 |
-| A-05 | pre-commit 模板的结构门禁钩子由 `language: system` + `python3` 改为 `language: python` + `python` | 本机实测：Windows venv 只有 `python.exe` / `pythonw.exe`，**没有 `python3`**；`language: system` 的 entry 首令牌由系统 PATH 直接解析（pre-commit 官方文档）。⚠️ **未端到端跑通 pre-commit**（启动即写 `~/.cache`，环境权限受限），仅有静态回归锁定 |
+| A-05 | pre-commit 模板的结构门禁钩子：解释器名改由 `install` / `sync` **按部署机器探测后填入**（模板只留默认值） | 四种写法逐一实测：`language: python`（我最初的修法）**不可用**；`language: script` + sh 启动器不可用；静态写死 `python3` / `python` 各只成立一半。详见下方"修正"节 |
 | A-01 | 门禁命令解释器回退：首令牌是 `python` / `python3` / `py` 但 PATH 解析不到时，换成当前解释器并明确告警；CI 内联壳同口径 | 新增 5 条单测；命令源（§2 与 project.py）仍可保持静态字符串，同源校验不受影响 |
 | A-09 | 契约母版与本仓库实例同批脱水：78 → **74 行**，行数余量 1 → 5 | `wc -l` 两文件均 74（门禁上限 79） |
 
@@ -41,6 +41,33 @@
 | 1 | 新增 `.github/workflows/ci.yml`：`ubuntu` + `windows` + `macos` 三平台跑同一套门禁（两个自检 + `verify` + `check-config`），`fail-fast: false` 免得一个平台红掩盖另一个平台的信息 | `.github/workflows/ci.yml` |
 | 2 | 与托管的 `gate.yml` **刻意分开**：不同文件名、不在 `ENFORCE_DEPLOY`、不带 `tsc-managed` 标记，`install`/`sync` 不碰它。母版"不部署自己的执法包"这条设计不变量保持不变 | 同上 |
 | 3 | 契约预算改为自动断言（原来只写在发版清单里手敲）：行数 < 80、规则数 ≤ 30，母版与实例一并受检 | `tests/unit/test_tsc_unit.py` |
+
+### 修正：A-05 的第一次修法是错的（`language: python` 实测不可用）
+
+上一版把 pre-commit 的结构门禁钩子从 `language: system` + `python3` 改成了
+`language: python` + `python`，依据是官方文档说 python 钩子跨平台受支持、由 pre-commit
+自建环境调用。**端到端实测证伪**（2026-09-23，四种写法对照）：
+
+| 写法 | 实测结果 |
+|---|---|
+| `system` + `python3`（原始） | ✅ 能跑并拦住坏文件（本机有 `python3.exe`；只有 `python` 的机器上才会报 `Executable not found`，属**报错拦住**而非静默放行） |
+| `system` + `python` | ✅ 能跑并拦住（但 macOS / 多数 Linux 上通常没有 `python`） |
+| `python` + `python`（上一版修法） | ❌ `ERROR: Directory '.' is not installable. Neither 'setup.py' nor 'pyproject.toml' found.` —— pre-commit 会先对项目根 `pip install .`，**没有可安装包的项目直接失败，所有平台一起坏** |
+| `script` + 项目内 sh 启动器 | ❌ `Executable '/bin/sh' not found`（Windows 上没有 `/bin/sh`） |
+
+**结论**：pre-commit 的 local 钩子只有 `language: system` 能跑项目内脚本，而 system 语言的
+`entry` 首令牌**完全靠系统 PATH 解析**；`python3`（macOS / 多数 Linux）与 `python`（Windows
+常见）没有交集，**静态模板写不出跨平台的名字**。
+
+最终做法：模板保留默认值 `python3`，真正的名字由 `deploy_enforcement` 在 `install` / `sync`
+时用 `shutil.which` 探测本机后填入（与 gate.yml 按 §2 填分支名同一机制）。效果上就是
+"按平台分别配置"——落盘件在每个平台各不相同，但不需要维护多份重复真身；换平台后重跑一次
+`tsc sync` 即自动校正（内容比对走同一套渲染逻辑，能自愈）。
+
+> **教训登记**：这条缺陷我连着判错两次——先是低估（"报错拦住，不算事"），后是修错
+> （照文档推断出一个更坏的写法）。两次都不是靠读代码发现的，是靠**端到端跑一遍**。
+> 这也是"新增多平台 CI"之外，A-05 最终被留成"仅静态回归锁定"的原因：CI 不装
+> pre-commit framework，这一层只能靠人工实测。
 
 ### CI 首跑就抓到一类真缺陷：非 UTF-8 控制台下中文输出把进程带崩
 
@@ -70,8 +97,9 @@
 - **契约标记代次仍为 `v4`**（`<!-- tsc-managed-contract:v4 -->`）。它是**契约格式代次**，不是发行号：契约条款与 §2 结构本轮没变，所以不动它——改了会让存量项目的 marker 认不出来，等于把所有下游项目误判成"外部 AGENTS.md"而拒绝同步。
 - 三处版本头（母版 `AGENTS.md`、`AUDIT-SPEC.md`、`BOOTSTRAP.md`）与执法包 README 同批更新；版本真源仍只有 `skills/tsc/VERSION` 一处。
 
-**本轮实测**：156 用例全绿（`python -m unittest discover -s tests -p "test_*.py"` rc=0）｜`tsc.py verify` rc=0（真实执行 LINT + TEST）｜`check-config` rc=0｜`doctor` rc=0（10 通过 / 0 警告 / 0 失败）｜结构门禁自检 35/35｜bracket_lint 自检 30/30｜`wc -l AGENTS.md` = 74 与母版零漂移。
-**多平台 CI 实测**：`ci.yml` 首跑 macOS + ubuntu 绿、Windows 红（见上节），修复后再跑 —— 结论以 Actions 页面为准。
+**本轮实测**：157 用例全绿（`python -m unittest discover -s tests -p "test_*.py"` rc=0）｜`tsc.py verify` rc=0（真实执行 LINT + TEST）｜`check-config` rc=0｜`doctor` rc=0（10 通过 / 0 警告 / 0 失败）｜结构门禁自检 35/35｜bracket_lint 自检 30/30｜`wc -l AGENTS.md` = 74 与母版零漂移。
+**多平台 CI 实测**：`ci.yml` 在 `ubuntu-latest` / `windows-latest` / `macos-latest` 三个 job 上**全部 success**（每个 job 的自检 / verify / check-config 三步均绿）。这一轮的首跑记录见"CI 首跑就抓到一类真缺陷"一节。
+**pre-commit 写法对照实验**：四种写法在 Windows 上逐一实跑，结论见"修正：A-05 的第一次修法是错的"。A-05 本身**仍无自动化回归**——CI 不装 pre-commit framework，只能靠人工实测。
 
 ## v4.0.0（2026-09-21）
 

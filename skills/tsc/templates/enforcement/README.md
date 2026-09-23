@@ -80,5 +80,12 @@ pre-commit install --hook-type commit-msg
 
 - 密钥扫描是**模式匹配**，自定义格式的内网域名、连接串需要自己加规则（gitleaks 的 `--config`），默认规则覆盖不到。
 - 本地钩子依赖 Node 与 Python 两个运行时；只在一个平台开发、且不想装的话，靠 CI 那层即可。
+- `.pre-commit-config.yaml` 里结构门禁条目的解释器名（`python3` / `python`）是 `install` / `sync`
+  时按**部署这台机器**探测后填入的，不是模板写死的值。原因：pre-commit 的 local 钩子只有
+  `language: system` 能跑项目内脚本，而 system 语言的 `entry` 首令牌**完全靠系统 PATH 解析**，
+  `python3`（macOS / 多数 Linux）与 `python`（Windows 常见）没有交集，写死哪个都只在半边平台成立。
+  换平台后重跑一次 `tsc sync` 即可自动校正（内容比对走同一套渲染逻辑，能自愈）。另两条路已实测
+  排除：`language: python` 会先对项目根 `pip install .`（没有 `setup.py` / `pyproject.toml` 即失败）；
+  `language: script` + 项目内 `sh` 启动器在 Windows 上报 `/bin/sh not found`。
 - `gate.yml` 的提交信息校验在 fork PR 上可能拿不到 base sha，此时该步会跳过；主干 push 与同仓库 PR 正常。
 - `gate.yml` 的 commitlint 在 `github.event.before` 为全零 SHA（新仓库首次推送等场景）时会因比对范围无效而报错（是显式报错，不是静默放行）；属极边缘场景。
