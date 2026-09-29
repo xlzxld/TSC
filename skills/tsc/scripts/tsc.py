@@ -477,13 +477,12 @@ def enforce_template_content(rel_src, proj_root, upstream, merged_agents_text):
         return None
     content = read_text(src)
     main_branch = section2_value(section2_text(merged_agents_text), "主干分支")
-    if rel_src.endswith("gate.yml"):
-        if main_branch and (
-            PLACEHOLDER in main_branch or main_branch.strip() in ("无", "—", "")
-        ):
+    if main_branch:
+        main_branch = main_branch.strip().strip("`").strip()
+        if PLACEHOLDER in main_branch or main_branch in ("无", "—", ""):
             main_branch = None  # §2 占位或未填（如非 git 项目）→ 保持模板默认 [main]
-        if main_branch:
-            content = content.replace("branches: [main]", "branches: [%s]" % main_branch)
+    if rel_src.endswith("gate.yml") and main_branch:
+        content = content.replace("branches: [main]", "branches: [%s]" % main_branch)
     if not is_node_project(proj_root):
         # 非 Node 项目：剔除 Node 专属区块（commitlint 整文件已在部署清单里排除）
         content = strip_node_regions(content)
@@ -653,11 +652,12 @@ def is_self_bootstrap(proj_root, upstream):
     if upstream is None:
         return False
     try:
-        proj = Path(proj_root).resolve()
-        up = Path(upstream).resolve()
+        proj = os.path.normcase(str(Path(proj_root).resolve()))
+        up = os.path.normcase(str(Path(upstream).resolve()))
+        up_skill = os.path.normcase(str((Path(proj_root) / "skills" / "tsc").resolve()))
     except OSError:
         return False
-    return proj == up or up == (proj / "skills" / "tsc")
+    return proj == up or up == up_skill
 
 
 def git_worktree_of(path):
@@ -702,7 +702,11 @@ def _enforce_actions(proj_root, upstream, merged_agents_text):
         # 把技能自动部署的分支名归一回模板默认值，供比较用；
         # 用户手改的其他分支名不会被归一，仍判为"内容不同"。
         main_branch = section2_value(section2_text(merged_agents_text), "主干分支")
-        if main_branch and PLACEHOLDER not in main_branch:
+        if main_branch:
+            main_branch = main_branch.strip().strip("`").strip()
+            if PLACEHOLDER in main_branch or main_branch in ("无", "—", ""):
+                main_branch = None
+        if main_branch:
             return text.replace("branches: [%s]" % main_branch, "branches: [main]")
         return text
 
@@ -924,9 +928,7 @@ def do_apply(proj_root, upstream, dry_run, force):
         if not dry_run and (need_project_py or need_source):
             agents_dir.mkdir(parents=True, exist_ok=True)
             if need_project_py:
-                original = read_text(project_py) if project_py.is_file() else None
-                shutil.copyfile(str(example), str(project_py))
-                journal.append((project_py, original))
+                journal_write(project_py, read_text(example))
             if need_source:
                 journal_write(
                     agents_dir / SOURCE_FILE,
@@ -1074,7 +1076,8 @@ def _popen_kwargs():
 # 任何一个都会在另一平台上变成"命令找不到"，于是门禁在最需要它的时候崩掉。
 # 这里做一次回退：PATH 里解析得到就不动，解析不到才换成当前解释器（并明确告警）。
 _INTERPRETER_HEAD = re.compile(
-    r'^(?P<indent>\s*)(?P<quote>"?)(?P<token>py|python[0-9.]*)(?P=quote)(?=\s|$)'
+    r'^(?P<indent>\s*)(?P<quote>"?)(?P<token>(?:py|python[0-9.]*)(?:\.exe)?)(?P=quote)(?=\s|$)',
+    re.IGNORECASE,
 )
 
 
@@ -1195,9 +1198,13 @@ def cmd_verify(proj_root, timeout_override=None):
 # --------------------------------------------------------------------------- #
 ROW_TO_KEY = {
     "格式化": "FMT_CHECK_CMD",
+    "Format": "FMT_CHECK_CMD",
     "静态检查": "LINT_CMD",
+    "Lint": "LINT_CMD",
     "测试": "TEST_CMD",
+    "Test": "TEST_CMD",
     "构建": "BUILD_CMD",
+    "Build": "BUILD_CMD",
 }
 
 
@@ -1264,16 +1271,17 @@ def cmd_check_config(proj_root):
 def cmd_update(timeout_s):
     root = upstream_root()
     old_ver = upstream_version(root) or "未知"
-    if git_worktree_of(root) is None:
+    host_repo = git_worktree_of(root)
+    if host_repo is None:
         warn("当前安装副本不含 .git（不在任何 git 工作树里）——通常由宿主插件市场或压缩包安装，本脚本无从拉取。")
         warn("本体更新请走宿主机制：打开宿主平台的插件/技能管理页，更新 tsc；")
         warn("或用 git clone / 市场重装修复后重试。项目契约不受影响，仍可 sync/verify。")
         return EXIT_STATE
     say("本体目录：%s（当前 v%s）" % (root, old_ver))
-    say("$ git -C %s pull --ff-only（超时 %ss）" % (root, timeout_s))
+    say("$ git -C %s pull --ff-only（超时 %ss）" % (host_repo, timeout_s))
     try:
         proc = subprocess.run(
-            ["git", "-C", str(root), "pull", "--ff-only"],
+            ["git", "-C", str(host_repo), "pull", "--ff-only"],
             capture_output=True, timeout=max(1, int(timeout_s)),
         )
     except subprocess.TimeoutExpired:
@@ -1322,6 +1330,7 @@ def cmd_rollback(proj_root):
                 if target.is_file():
                     target.unlink()
             else:
+                target.parent.mkdir(parents=True, exist_ok=True)
                 write_text_atomic(target, entry["content"])
             restored.append((entry["action"], entry["path"]))
         except (OSError, KeyError) as exc:
@@ -1581,6 +1590,11 @@ def _dispatch(args):
 
     if args.command == "update":
         return cmd_update(args.timeout if args.timeout else DEFAULT_TIMEOUT_S)
+
+    if not proj_root.is_dir():
+        warn("目标项目目录不存在：%s" % proj_root)
+        return EXIT_STATE
+
     if args.command == "rollback":
         return cmd_rollback(proj_root)
 
@@ -1601,10 +1615,6 @@ def _dispatch(args):
         return cmd_verify(proj_root, timeout_override=args.timeout)
     if args.command == "check-config":
         return cmd_check_config(proj_root)
-
-    if not proj_root.is_dir():
-        warn("目标项目目录不存在：%s" % proj_root)
-        return EXIT_STATE
 
     if args.command == "sync" and args.force:
         warn("sync 不接受 --force：接管外部 AGENTS.md 只能通过 install --force 显式完成。")

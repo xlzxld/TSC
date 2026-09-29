@@ -80,7 +80,7 @@ import shutil
 import subprocess
 import sys
 
-__version__ = "1.2.1"
+__version__ = "1.2.2"
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 if HERE not in sys.path:
@@ -494,7 +494,7 @@ L2_BY_EXT = {
     ".sh": check_bash, ".bash": check_bash, ".zsh": check_bash,
     ".rb": check_ruby,
     ".go": check_gofmt,
-    ".ps1": check_powershell,
+    ".ps1": check_powershell, ".psm1": check_powershell, ".psd1": check_powershell,
 }
 
 # L2 语言兜底（用于无扩展名文件/标准输入/显式 --lang 覆盖）
@@ -507,6 +507,7 @@ L2_BY_LANG = {
     "sh": check_bash,
     "rb": check_ruby,
     "go": check_gofmt,
+    "ps1": check_powershell,
 }
 
 SUPPORTED_EXTS = set(bracket_lint.EXT_MAP) | set(EXTRA_EXT)
@@ -751,6 +752,22 @@ def exit_code_for(results):
 # 文件收集
 # --------------------------------------------------------------------------
 
+def is_supported_file(path: str) -> bool:
+    """是否为受支持的代码文件（含带 shebang 的无后缀脚本）。"""
+    ext = os.path.splitext(path)[1].lower()
+    if ext in DOC_EXTS:
+        return False
+    if ext in SUPPORTED_EXTS:
+        return True
+    if not ext and os.path.isfile(path):
+        try:
+            with open(path, "rb") as fh:
+                return fh.read(2) == b"#!"
+        except OSError:
+            return False
+    return False
+
+
 def expand_paths(paths):
     """文件与目录 -> 待检文件表（目录递归，跳过 SKIP_DIRS 与不支持扩展名）。"""
     files = []
@@ -759,8 +776,9 @@ def expand_paths(paths):
             for root, dirs, names in os.walk(p):
                 dirs[:] = sorted(d for d in dirs if d not in SKIP_DIRS)
                 for name in sorted(names):
-                    if os.path.splitext(name)[1].lower() in SUPPORTED_EXTS:
-                        files.append(os.path.join(root, name))
+                    full = os.path.join(root, name)
+                    if is_supported_file(full):
+                        files.append(full)
         else:
             files.append(p)
     seen, uniq = set(), []
@@ -916,6 +934,8 @@ _SELFTEST = [
     ("yaml 裸标量全角不误报", "x.yaml", "title: 我的（备用）方案\n", True),
     ("vue 标记文件跳过", "x.vue", "<div>（中文文案）{{ msg }}</div>\n", True),
     ("无后缀脚本 shebang 语法错误(L2)", "my_script", "#!/usr/bin/env python3\nx = 1 + * 2\n", False),
+    ("ps1 正常", "x.ps1", "function Get-ProcessName { Get-Process | Select-Object -First 1 }\n", True),
+    ("ps1 括号失衡(L1)", "x.ps1", "function Get-ProcessName { Get-Process | Select-Object -First 1\n", False),
 ]
 
 # 伪路径下 L1 的 plain profile 未闭合串不报警——md 用例依赖 skipped 分支，不受影响
@@ -996,9 +1016,7 @@ def main(argv=None) -> int:
         if terr:
             print("structure_guard 工具故障：%s" % terr, file=sys.stderr)
             return 2
-        files = [f for f in files
-                 if os.path.splitext(f)[1].lower() in SUPPORTED_EXTS
-                 and os.path.splitext(f)[1].lower() not in DOC_EXTS]
+        files = [f for f in files if is_supported_file(f)]
         truncated = 0
     else:
         ap.print_help()

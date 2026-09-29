@@ -25,6 +25,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]
 SKILL = REPO / "skills" / "tsc"
 SCRIPT = SKILL / "scripts" / "tsc.py"
+CURRENT_VERSION = (SKILL / "VERSION").read_text(encoding="utf-8").strip()
 
 # 跨平台门禁夹具：`true` / `sleep` 是 POSIX 专属，Windows 上没有（A-02）。
 QUICK_CMD = '"%s" -c "pass"' % sys.executable
@@ -115,7 +116,7 @@ class InstallTests(E2EBase):
         self.assertIn("hashFiles('commitlint.config.js') != ''", gate)
         self.assertIn("不部署 commitlint", out)
         version = (self.tmp / ".agents" / "VERSION").read_text(encoding="utf-8").strip()
-        self.assertEqual(version, "5.0.0")
+        self.assertEqual(version, CURRENT_VERSION)
 
     def test_node_install_adds_commitlint(self):
         (self.tmp / "package.json").write_text('{"name": "x"}', encoding="utf-8")
@@ -151,7 +152,7 @@ class InstallTests(E2EBase):
         self.assertEqual(code, 0, out)
         record = json.loads((self.tmp / ".agents" / ".source").read_text(encoding="utf-8"))
         self.assertEqual(record["source"], str(SKILL))
-        self.assertEqual(record["version"], "5.0.0")
+        self.assertEqual(record["version"], CURRENT_VERSION)
         self.assertIn("installed_at", record)
 
     def test_sync_same_state_is_noop(self):
@@ -181,7 +182,7 @@ class UpgradeTests(E2EBase):
         self.assertEqual(code, 0, out)
         agents = self.tmp / "AGENTS.md"
         text = agents.read_text(encoding="utf-8").replace("<!-- tsc-managed-contract:v4 -->\n\n", "")
-        text = text.replace("> **版本 v5.0.0**", "> **版本 v3.3.2**")
+        text = re.sub(r">\s*\*\*版本\s+v[0-9.]+\*\*", "> **版本 v3.3.2**", text)
         agents.write_text(text, encoding="utf-8")
         (self.tmp / ".agents" / "VERSION").write_text("3.3.2\n", encoding="utf-8")
         (self.tmp / ".agents" / ".source").write_text(
@@ -192,10 +193,10 @@ class UpgradeTests(E2EBase):
         self._make_v3_project()
         code, out = run_script("sync", "--project", str(self.tmp))
         self.assertEqual(code, 0, out)
-        self.assertIn("3.3.2 → 5.0.0", out)
+        self.assertIn("3.3.2 → %s" % CURRENT_VERSION, out)
         agents = (self.tmp / "AGENTS.md").read_text(encoding="utf-8")
         self.assertIn("<!-- tsc-managed-contract:v4 -->", agents)
-        self.assertEqual((self.tmp / ".agents" / "VERSION").read_text().strip(), "5.0.0")
+        self.assertEqual((self.tmp / ".agents" / "VERSION").read_text().strip(), CURRENT_VERSION)
         record = json.loads((self.tmp / ".agents" / ".source").read_text(encoding="utf-8"))
         self.assertEqual(record["source"], str(SKILL))  # 已修正为实际使用的上游
 
@@ -213,7 +214,7 @@ class UpgradeTests(E2EBase):
         code, out = run_script("sync", "--project", str(self.tmp))
         self.assertEqual(code, 0, out)
         self.assertEqual(
-            (self.tmp / ".agents" / "VERSION").read_text().strip(), "5.0.0",
+            (self.tmp / ".agents" / "VERSION").read_text().strip(), CURRENT_VERSION,
             "裸 sync 后版本必须是当前本体的，不是 .source 指向的旧上游")
 
     def test_explicit_source_used_for_one_sync_then_repoints_provenance(self):
@@ -233,7 +234,7 @@ class UpgradeTests(E2EBase):
         # 再裸 sync：回到当前本体
         code, out = run_script("sync", "--project", str(self.tmp))
         self.assertEqual(code, 0, out)
-        self.assertEqual((self.tmp / ".agents" / "VERSION").read_text().strip(), "5.0.0")
+        self.assertEqual((self.tmp / ".agents" / "VERSION").read_text().strip(), CURRENT_VERSION)
 
     def test_update_on_nongit_copy_reports_host_update_path(self):
         """规格 §10：没有 .git 的已安装副本 → 提示宿主升级机制，rc=3。
@@ -547,13 +548,13 @@ class DoctorStatusTests(E2EBase):
         self.assertEqual(code, 0, out)
         data = json.loads(out)
         self.assertEqual(data["ownership"], "managed")
-        self.assertEqual(data["contract_version"], "5.0.0")
+        self.assertEqual(data["contract_version"], CURRENT_VERSION)
         self.assertTrue(data["installed"])
 
     def test_version_flag(self):
         code, out = run_script("--version")
         self.assertEqual(code, 0, out)
-        self.assertEqual(out.strip(), "5.0.0")
+        self.assertEqual(out.strip(), CURRENT_VERSION)
 
 
 if __name__ == "__main__":

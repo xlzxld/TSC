@@ -1,5 +1,25 @@
 # 变更记录 (CHANGELOG)
 
+## v5.1.0（2026-09-29）
+
+### 彻底到位与多平台/运行时增强（一次性全方位夯实）
+
+| ID | 修复与改进 | 实测取证 |
+|---|---|---|
+| C-01 | **PowerShell 脚本全面纳入结构门禁**：在 `bracket_lint.py` 中新增 `ps1` 词法 profile（支持 `#` 单行注释、`<# ... #>` 块注释、`` ` `` 转义符、`$()` 插值与双/单引号字符串）并将 `.ps1`、`.psm1`、`.psd1` 映射接入；同步在 `structure_guard.py` 中接入 `L2_BY_EXT` 与 `L2_BY_LANG`（调度 `check_powershell` 执行深检） | 修复前 PowerShell 脚本被目录扫描与 `--staged` 彻底忽略跳过；修复后支持平衡性 L1 扫描与 L2 PowerShell 语法深检，新增 2 项内置自检与 2 项单元测试，38/38 通过 |
+| C-02 | **无后缀可执行脚本与标准输入 Shebang 识别完善**：`structure_guard.py` 增强 `is_supported_file`，支持首 2 字节为 `#!` 的无后缀脚本文件；`bracket_lint.py` 的 `detect_lang` 在 `<stdin>` 输入下先读首行 shebang 匹配语言 profile，避免直接降级为 `plain` | 修复前 `bin/run` 等无后缀可执行脚本在 `--staged` 模式下被忽略跳过，标准输入也无法识别 shebang；修复后全流程精准识别并执行对应语法检查 |
+| C-03 | **非 UTF-8 终端控制台防崩溃（Windows CP1252 / CP936）**：在 `bracket_lint.py` 中新增 `_init_stdout()`，若标准输出编码（如英文 Windows CP1252）无法编码中文字符时自动挂载 UTF-8 替换流 | 消除在特定 Windows 环境与 CI runner 上打印中文报告引发的 `UnicodeEncodeError: 'charmap' codec can't encode...` 崩溃风险 |
+| C-04 | **Git Hook 安装器优先级与 pre-commit 框架冲突感知**：`install_hook.py` 将解释器检测优先级调整为 `python3` 优先于 `python`（与 `tsc.py` 一致）；检测到仓库使用 pre-commit framework 生成的 hook 时给出清晰友好指引 | 修复前在 Linux/macOS 默认环境下可能调起旧版 `python` 解释器；修复后解释器调度统一，且能识别 pre-commit hook 冲突并返回码 2 提示用户 |
+| C-05 | **主干分支名注入清洗**：`tsc.py` 的 `enforce_template_content` 与 `debranch` 在解析 §2 的 `主干分支` 时严格剥离反引号（`` ` ``）与首尾空白字符 | 修复前若用户在 §2 中书写 `` `main` ``，部署生成的 `gate.yml` 会产生非法 YAML 语法 `branches: [`main`]`；修复后统一清洗为标准字面量 `branches: [main]` |
+| C-06 | **Windows 路径大小写归一化（自举判据）**：`is_self_bootstrap` 引入 `os.path.normcase` 归一化盘符与路径 | 修复前 Windows 系统不同盘符大小写或大小写不敏感路径在自举判断时可能产生假阴性，导致母版仓库被误认作普通接入项目；修复后 100% 稳定匹配 |
+| C-07 | **`project.py` 部署采用原子日志事务写入**：`tsc.py` 的 `do_apply` 将 `project.py` 写入改为调用 `journal_write` | 确保 `project.py` 在写入时具备 UTF-8 + LF 格式化保障、临时文件原子替换，并被纳入 rollback 事务清单可随时精准撤销 |
+| C-08 | **解释器回退正则兼容 `.exe` 与大小写**：`_INTERPRETER_HEAD` 增加 `(?:\.exe)?` 与 `re.IGNORECASE` 标识，并在 `gate.yml` CI 聚合壳中同步对齐 | 修复前带 `.exe`（如 `python.exe` / `py.exe`）或大写开头的命令无法被正则识别回退；修复后本地与 CI 双端同口径完美解析并回退 |
+| C-09 | **§2 表格表头支持英文国际化关键字**：`ROW_TO_KEY` 补充 `Format`、`Lint`、`Test`、`Build` 支持，并在 `gate.yml` 中同步对齐 | 修复前英文开源项目在 §2 中书写 `Format` / `Lint` / `Test` / `Build` 表头时在 `check-config` 中报不一致；修复后中英文表头双向兼容 |
+| C-10 | **`tsc update` 定位上游真实 Git 工作树**：`cmd_update` 从仅在技能目录找 `.git` 改为通过 `git_worktree_of(upstream_root())` 定位并拉取 `host_repo` | 修复前母版仓库或子目录安装形态下执行 `tsc update` 因子目录无 `.git` 直接报错拒绝；修复后正确对上游 Git 根执行 `git pull --ff-only` |
+| C-11 | **`cmd_rollback` 自动创建被删父级目录**：在回滚写盘前执行 `target.parent.mkdir(parents=True, exist_ok=True)` | 修复前回滚若遇父目录被删（如 `.agents/` 某子目录）会抛 `FileNotFoundError`；修复后自动重建层级目录并安全恢复文件 |
+| C-12 | **目标项目目录存在性前置断言**：`_dispatch` 在分发除 `update` 外的所有项目级命令前统一执行 `if not proj_root.is_dir()` | 修复前 `status`、`verify`、`doctor` 等命令在传入不存在的项目路径时直接进入执行产生混淆报错；修复后统一步调返回退出码 3 并输出标准化告警 |
+| C-13 | **文档、路由与规范三位一体对齐**：`commands/tsc.md` 补全 `verify` 门禁与 `check-config` 同源校验快捷路由；`BOOTSTRAP.md` 模式 B 与模式 C 厘清（外部未托管 AGENTS.md 用 `install --force` 接管，已托管升级用 `sync`）；版本升级至 `v5.1.0` | 文档、规范与代码实现 100% 同步，无任何语义冲突或漂移 |
+
 ## v5.0.0（2026-09-23）
 
 ### 第二轮评审使用缺陷修复（B-01 ~ B-05，均附回归测试）

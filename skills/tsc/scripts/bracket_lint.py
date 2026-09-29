@@ -46,7 +46,7 @@ import json
 import os
 import sys
 
-__version__ = "1.2.0"
+__version__ = "1.2.1"
 
 OPEN = {"(": ")", "[": "]", "{": "}"}
 CLOSE = {v: k for k, v in OPEN.items()}
@@ -134,6 +134,10 @@ _S_LUA = [
     ("'", "'", True, False, True),
     ("[[", "]]", False, True, False),
 ]
+_S_PS1 = [
+    ('"', '"', True, True, True),
+    ("'", "'", False, True, True),
+]
 
 PROFILES = {
     "py": dict(
@@ -182,6 +186,11 @@ PROFILES = {
         block=[("/*", "*/")],
         strings=[('"', '"', True, False, True), ("'", "'", True, False, True), ("`", "`", True, False, True)],
     ),
+    "ps1": dict(
+        line=["#"],
+        block=[("<#", "#>")],
+        strings=_S_PS1,
+    ),
     "plain": dict(
         line=["//", "#", "--"],
         block=[("/*", "*/")],
@@ -209,6 +218,7 @@ EXT_MAP = {
     ".lua": "lua",
     ".rb": "rb",
     ".php": "php",
+    ".ps1": "ps1", ".psm1": "ps1", ".psd1": "ps1",
 }
 
 REGEX_PREV_CHARS = set("(,=:[!&|?{};+-*%~^<>")
@@ -751,13 +761,12 @@ def detect_lang(path: str, src: str) -> str:
     ext = os.path.splitext(path)[1].lower()
     if ext in EXT_MAP:
         return EXT_MAP[ext]
-    if path in ("-", "<stdin>"):
-        return "plain"
     first = src.split("\n", 1)[0]
     if first.startswith("#!"):
         for key, prof in (
             ("python", "py"), ("node", "js"), ("deno", "js"), ("bash", "sh"),
             ("sh", "sh"), ("zsh", "sh"), ("ruby", "rb"), ("php", "php"), ("lua", "lua"),
+            ("pwsh", "ps1"), ("powershell", "ps1"),
         ):
             if key in first:
                 return prof
@@ -817,6 +826,8 @@ _SELFTEST = [
     ("全角分号", "js", "let x = 1\uff1b\n", False),
     ("json 正常", "json", '{"a": [1, 2], "b": {"c": 3}}\n', True),
     ("json 缺右括号", "json", '{"a": [1, 2}\n', False),
+    ("ps1 正常", "ps1", "function Get-Test { Write-Output 'OK' }\n", True),
+    ("ps1 块注释与括号失衡", "ps1", "<# comment #> function Get-Test { Write-Output [1, 2\n", False),
 ]
 
 
@@ -842,12 +853,17 @@ def selftest() -> int:
     return 0 if bad == 0 else 1
 
 
-# --------------------------------------------------------------------------
-# CLI
-# --------------------------------------------------------------------------
+def _init_stdout():
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            pass
+
 
 def main(argv=None) -> int:
     global USE_COLOR
+    _init_stdout()
     ap = argparse.ArgumentParser(
         prog="bracket_lint",
         description="语言感知的括号平衡检查器：精确定位未闭合括号的起始行列。",
@@ -917,8 +933,5 @@ def main(argv=None) -> int:
 
 
 if __name__ == "__main__":
-    try:
-        sys.stdout.reconfigure(encoding="utf-8")
-    except Exception:
-        pass
+    _init_stdout()
     sys.exit(main())

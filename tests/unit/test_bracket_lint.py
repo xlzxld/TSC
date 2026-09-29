@@ -78,5 +78,24 @@ class JsInterpolationBoundaryTests(unittest.TestCase):
             sc.stack, "插值后面少写的右花括号没被发现——说明插值扫描吞掉了后续内容")
 
 
+class PowerShellSupportTests(unittest.TestCase):
+    def test_ps1_balanced(self):
+        src = 'function Test-Item { param($Path) if ($Path) { Write-Host "OK $(1 + 2)" } }\n'
+        sc = scan(src, "ps1")
+        self.assertTrue(sc.ok, sc.issues)
+
+    def test_ps1_unbalanced(self):
+        src = 'function Test-Item { param($Path) if ($Path) { Write-Host "bad" }\n'
+        sc = scan(src, "ps1")
+        self.assertFalse(sc.ok)
+        self.assertEqual(sc.result()["suggestion"], "}")
+
+    def test_stdin_shebang_detect(self):
+        src = '#!/usr/bin/env python3\nx = 1\n'
+        lang = bracket_lint.detect_lang("<stdin>", src)
+        self.assertEqual(lang, "py")
+
+
 if __name__ == "__main__":
     unittest.main()
+

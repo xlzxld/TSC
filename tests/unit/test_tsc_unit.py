@@ -595,7 +595,7 @@ class SkillPackagingTests(unittest.TestCase):
                          tsc.read_text(REPO / ".agents" / "VERSION").strip() !=
                          tsc.upstream_version(SKILL),
                          ".agents/VERSION 若存在必须与技能 VERSION 一致")
-        self.assertEqual(tsc.upstream_version(SKILL), "5.0.0")
+        self.assertEqual(tsc.upstream_version(SKILL), "5.1.0")
 
     def test_contract_line_budget(self):
         """契约行数预算：母版与实例都必须 < 80 行（`wc -l` LF 口径）。
@@ -731,5 +731,84 @@ class AtomicWriteTests(unittest.TestCase):
         self.assertEqual(list(target_dir.glob("*.tsc-tmp")), [])
 
 
+class DispatchTests(unittest.TestCase):
+    def test_nonexistent_project_fails_early(self):
+        rc = tsc.main(["verify", "--project", "non_existent_folder_xyz_123"])
+        self.assertEqual(rc, tsc.EXIT_STATE)
+
+    def test_status_nonexistent_project_fails_early(self):
+        rc = tsc.main(["status", "--project", "non_existent_folder_xyz_123"])
+        self.assertEqual(rc, tsc.EXIT_STATE)
+
+
+class TemplateSanitizationTests(unittest.TestCase):
+    def test_main_branch_sanitization_in_enforce_template(self):
+        agents_sample_trunk = AGENTS_SAMPLE.replace("| 主干分支 | master |", "| 主干分支 | `trunk` |")
+        out = tsc.enforce_template_content("templates/enforcement/gate.yml", REPO, SKILL, agents_sample_trunk)
+        self.assertIsNotNone(out)
+        self.assertIn("branches: [trunk]", out)
+
+
+class InterpreterRetargetTests(unittest.TestCase):
+    def test_retarget_matches_exe_and_case(self):
+        m = tsc._INTERPRETER_HEAD.match("python.exe -m pytest")
+        self.assertIsNotNone(m)
+        self.assertEqual(m.group("token"), "python.exe")
+        m2 = tsc._INTERPRETER_HEAD.match("Py.exe -3")
+        self.assertIsNotNone(m2)
+
+
+class RollbackParentDirTests(unittest.TestCase):
+    def test_rollback_recreates_deleted_parent_dir(self):
+        import shutil
+        tmp = Path(tempfile.mkdtemp(prefix="tsc-rb-"))
+        self.addCleanup(shutil.rmtree, tmp, True)
+        backup_dir = tmp / tsc.AGENTS_DIR / tsc.BACKUP_DIRNAME
+        backup_dir.mkdir(parents=True)
+        manifest_file = backup_dir / "manifest.json"
+        manifest_data = {
+            "contract_version": "5.0.0",
+            "files": [
+                {
+                    "path": "sub/target.txt",
+                    "action": "modify",
+                    "content": "restored",
+                }
+            ]
+        }
+        manifest_file.write_text(json.dumps(manifest_data), encoding="utf-8")
+        target_file = tmp / "sub" / "target.txt"
+        self.assertFalse((tmp / "sub").exists())
+        rc = tsc.cmd_rollback(tmp)
+        self.assertEqual(rc, 0)
+        self.assertTrue(target_file.is_file())
+        self.assertEqual(target_file.read_text(encoding="utf-8"), "restored")
+
+
+class RowToKeyEnglishTests(unittest.TestCase):
+    def test_row_to_key_english_headers(self):
+        import shutil
+        tmp = Path(tempfile.mkdtemp(prefix="tsc-row-"))
+        self.addCleanup(shutil.rmtree, tmp, True)
+        agents_content = """# Title
+## 2. Project
+| Key | Command | Status |
+|---|---|---|
+| Format | black --check | ok |
+| Lint | ruff check | ok |
+| Test | pytest | ok |
+| Build | cargo build | ok |
+## 3. End
+"""
+        (tmp / tsc.AGENTS_MD).write_text(agents_content, encoding="utf-8")
+        table = tsc.read_section2_values(tmp)
+        self.assertIsNotNone(table)
+        self.assertEqual(table.get("FMT_CHECK_CMD"), "black --check")
+        self.assertEqual(table.get("LINT_CMD"), "ruff check")
+        self.assertEqual(table.get("TEST_CMD"), "pytest")
+        self.assertEqual(table.get("BUILD_CMD"), "cargo build")
+
+
 if __name__ == "__main__":
     unittest.main()
+

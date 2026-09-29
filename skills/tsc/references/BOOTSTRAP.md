@@ -1,6 +1,6 @@
 # 规范部署与适配生成器 (BOOTSTRAP.md)
 
-> **版本 v5.0.0** | 与 `templates/AGENTS.md` v5.0.0、`references/AUDIT-SPEC.md` 配套。
+> **版本 v5.1.0** | 与 `templates/AGENTS.md` v5.1.0、`references/AUDIT-SPEC.md` 配套。
 > **单源原则**：本文件**不内嵌**契约模板。母版 = 技能目录 `templates/AGENTS.md`；执行逻辑常驻技能 `scripts/`，**不复制进项目**。契约只有一个真身，禁止再复制出第二份。
 > **使用方法**：由 AI 代跑 `python3 "<技能根>/scripts/tsc.py" install --project <项目根>`（建议先加 `--dry-run` 看变化），然后说"适配 / 初始化规范"；或直接说"读取通用母版，自动扫描当前项目，生成定制化 AGENTS.md。有无法确定的配置再问我。"
 
@@ -21,8 +21,8 @@
 ## 阶段 1：模式判定（三选一，禁止混淆）
 
 - **模式 A（新项目部署）**：目标项目根目录**无** AGENTS.md → 用 `tsc.py install` 落地部署单元（根目录 `AGENTS.md` + 项目内 `.agents/`仅配置 + 执法包落盘件；执行逻辑不进项目），再执行阶段 3 填充。
-- **模式 B（已有契约适配）**：目标项目根目录**已有** AGENTS.md → 用 `tsc.py sync` 重新合成，**仅重算其 §2 表格**，输出修改前后 diff，等待确认后才写入；禁止全文覆盖，禁止触碰 §0 / §1 / §3 / §4 / §5。
-- **模式 C（契约版本升级）**：目标项目已有**旧版本**本契约 → 用 `tsc.py sync` 整体同步升级，仅保留项目的 §2 取值，输出版本级 diff，确认后写入；禁止静默丢弃项目定制。旧结构（根目录散着的 `AUDIT-SPEC.md` / `BOOTSTRAP.md` / `enforcement/` / `test/`）由 `sync` 自动搬进 `.agents/`，**不自动删除任何文件**，只打印建议人工删除清单。
+- **模式 B（已有外部契约接管）**：目标项目根目录**已有非 TSC 托管**的 AGENTS.md → `tsc.py install` 会防御性拒绝并报警；经用户显式授权后使用 `tsc.py install --force` 接入（原契约自动备份至 `.agents/backup/`），再执行阶段 3 探测填充。
+- **模式 C（契约版本升级与同步）**：目标项目已有 **TSC 托管**的本契约 → 用 `tsc.py sync` 整体同步升级，保留项目的 §2 取值，输出版本级 diff，确认后写入；禁止静默丢弃项目定制。旧结构（根目录散着的 `AUDIT-SPEC.md` / `BOOTSTRAP.md` / `enforcement/` / `test/`）由 `sync` 自动搬进 `.agents/`，**不自动删除任何文件**，只打印建议人工删除清单。
 
 ## 阶段 2：人机对齐门禁（极简）
 

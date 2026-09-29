@@ -76,7 +76,12 @@ jobs:
 
           # 同源校验：AGENTS.md §2 与 .agents/project.py 必须一致。
           # 判定逻辑与本地 `tsc.py check-config` 同源（两套执行壳，一个命令源）。
-          ROW_TO_KEY = {"格式化": "FMT_CHECK_CMD", "静态检查": "LINT_CMD", "测试": "TEST_CMD", "构建": "BUILD_CMD"}
+          ROW_TO_KEY = {
+              "格式化": "FMT_CHECK_CMD", "Format": "FMT_CHECK_CMD", "format": "FMT_CHECK_CMD",
+              "静态检查": "LINT_CMD", "Lint": "LINT_CMD", "lint": "LINT_CMD",
+              "测试": "TEST_CMD", "Test": "TEST_CMD", "test": "TEST_CMD",
+              "构建": "BUILD_CMD", "Build": "BUILD_CMD", "build": "BUILD_CMD",
+          }
           def split_row(line):
               text = line.strip()
               if text.startswith("|"):
@@ -162,7 +167,9 @@ jobs:
           # 换成当前解释器。与本地 tsc.py 的 retarget_interpreter 同口径——
           # 命令源必须是两处一致的静态字符串，所以只能在执行壳里兜这一层。
           INTERP_HEAD = re.compile(
-              r'^(?P<indent>\s*)(?P<quote>"?)(?P<token>py|python[0-9.]*)(?P=quote)(?=\s|$)')
+              r'^(?P<indent>\s*)(?P<quote>"?)(?P<token>(?:py|python[0-9.]*)(?:\.exe)?)(?P=quote)(?=\s|$)',
+              re.IGNORECASE,
+          )
           def retarget(cmd):
               m = INTERP_HEAD.match(cmd or "")
               if m is None or shutil.which(m.group("token")):
