@@ -38,6 +38,10 @@ repos:
   #    只在本钩子层（pre-commit framework）激活时运行；
   #    用 install_hook.py 裸钩子的项目与此条目二选一（叠加只是重复检查，不冲突）。
   #
+  #    --strict：门禁模式必带——暂存文件被截断 / 检查降级时宁可拦下也不给"假绿"；
+  #    --allow-missing-tools：显式放行"工具缺席"类降级（node/PyYAML 等不在 PATH），
+  #    截断、超大文件、未知语言等降级仍然会拦。
+  #
   #    ⚠️ entry 里的解释器名（python3 / python）由 `tsc install / sync` 按**部署这台
   #    机器**探测后填入，不是模板写死的值。原因：pre-commit 的 local 钩子只有
   #    `language: system` 能跑项目内脚本，而 system 语言的 entry 首令牌**完全靠系统
@@ -45,12 +49,12 @@ repos:
   #    写死任何一个都会在另一平台报 "Executable ... not found" 把提交堵住。
   #    换平台后重跑一次 `tsc sync` 即自动校正（内容比对走同一套渲染逻辑，能自愈）。
   #    （另两条路已实测排除：language: python 会先对项目根 pip install .，没有
-  #      setup.py / pyproject.toml 就 ERROR: Directory '.' is not installable；
+  #      setup.py/pyproject.toml 就 ERROR: Directory '.' is not installable；
   #      language: script + 项目内 sh 启动器在 Windows 上报 /bin/sh not found。）
   - repo: local
     hooks:
       - id: structure-guard
         name: 结构门禁 (structure_guard)
         language: system
-        entry: python3 .agents/structure_guard.py --staged --quiet --color never
+        entry: python3 .agents/structure_guard.py --staged --strict --allow-missing-tools --quiet --color never
         pass_filenames: false

@@ -19,8 +19,10 @@ bracket_lint 解决"括号在哪一行失衡"，但 HYT-CAD 坑 #75 证明：括
                 .ps1  PowerShell Parser::ParseFile（Windows 自带）
   L3 形态层   调用形态元数与顶层不变量（LISP 家族，坑 #75/#73 泛化）：
                 setq 参数须偶数 / if 2~3 段 / foreach >=3 段 / defun 须顶层
-  L4 断言层   项目专属回归断言：<项目根>/guard_asserts.py 存在时自动加载，
-              约定暴露 run(paths) -> [(path, line, msg), ...]（check_audit_fixes 模式）
+  L4 断言层   项目专属回归断言：**仅当显式传 `--asserts <路径>` 时加载**，
+              约定暴露 run(paths) -> [(path, line, msg), ...]（check_audit_fixes 模式）。
+              不再从项目根自动加载 guard_asserts.py——仓库内容不构成执行授权：
+              任何 PR 都不该能让开发者本机的提交钩子执行任意代码（收官体检 A-01）
 
 四道闸共用本入口
 ----------------
@@ -62,10 +64,18 @@ bracket_lint 解决"括号在哪一行失衡"，但 HYT-CAD 坑 #75 证明：括
 设计要点
 --------
   - 权威工具缺失 = "降级并标注"，绝不因环境缺工具而报通过（降级写进结果）。
+  - **严格模式（--strict）**：文件截断 / 超大文件降级 / 未知语言 / 工具缺失中的
+    任何一项都会让退出码非 0（默认 2）——CI / pre-commit / 聚合门禁都应带此开关，
+    "没真正查完"永远不等于"通过"。`--allow-missing-tools` 显式放行工具缺席这一类
+    降级（明确配置允许），其余降级类别照拦。本地人工模式（不带 --strict）只给
+    warning，但汇总行会如实标注"检查不完整"，绝不输出"完整检查通过"。
   - 闸1（--from-hook）fail-open：stdin 解析失败、工具故障一律放行（闸2/3 兜底）；
-    只有确凿的结构问题才退出 2 拦截，防止钩子自身变成事故源。
-  - 子进程判定统一为"退出码非 0 或 stderr 非空"双条件，不赌单一信号。
-  - 超大文件（>2MB）只跑 L0/L1：深层解析对巨型生成物的耗时与误报都不划算。
+    只有确凿的结构问题才退出 2 拦截，防止钩子自身变成事故源。文件数超过上限时
+    同样放行但**明确告警**（静默截断 = 假绿，闸2/3 兜底）。
+  - 子进程判定以**退出码**为准；stderr 仅作诊断信息（有些合法命令会往 stderr 打
+    warning，"stderr 有内容"本身不是失败信号）。
+  - 超大文件（>2MB）只跑 L0/L1：深层解析对巨型生成物的耗时与误报都不划算；
+    该降级在严格模式下必须拦下。
 """
 
 # tsc-managed —— 落盘件：随 tsc install / sync 复制到项目 .agents/，由技能托管更新；删除本行即视为项目接管。
@@ -80,7 +90,7 @@ import shutil
 import subprocess
 import sys
 
-__version__ = "1.2.2"
+__version__ = "1.3.0"
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 if HERE not in sys.path:
@@ -373,11 +383,15 @@ def check_yaml(path, src):
 
 
 def _subprocess_check(path, cmd, parse_stderr, toolname):
-    """通用外部命令检查：failed = 退出码非 0 或 stderr 非空（双条件，不赌单一信号）。"""
+    """通用外部命令检查：以**退出码**为唯一失败判据，stderr 仅作诊断。
+
+    合法命令也可能往 stderr 打 warning（旧版"stderr 非空即失败"会把它们误判成
+    语法错误——假红与假绿同样不可接受）。退出码非 0 才是问题，此时解析
+    stderr / stdout 提取行列信息。"""
     rc, out, err, terr = _run_cmd(cmd)
     if terr:
         return None, None, "%s 不可用，跳过 %s 深检" % (terr, toolname)
-    if rc == 0 and not err.strip():
+    if rc == 0:
         return None, None, None
     line, col, msg = parse_stderr(err or out or ("退出码 %s" % rc))
     return _mk_issue("L2", line, col, "syntax-error", "%s: %s" % (toolname, msg)), None, None
@@ -471,7 +485,7 @@ def check_powershell(path, src):
         return None, None, "PowerShell 不可用，.ps1 仅做平衡检查"
     first = next((l for l in out.splitlines() if l.strip()), "")
     m = re.match(r"^(\d+):(\d+):\s*(.+)$", first)
-    if rc != 0 or first:
+    if rc != 0:  # 退出码为准：rc==0 时 stdout/stderr 的内容只是诊断信息
         msg = m.group(3) if m else (first or "退出码 %s" % rc)
         line = int(m.group(1)) if m else 1
         col = int(m.group(2)) if m else 1
@@ -524,23 +538,66 @@ def detect_lang(label, src):
     return bracket_lint.detect_lang(label, src)
 
 
-def _exempt_filter(src, issues):
-    """行内豁免：问题行文本含 guard:skip（或 guard:skip=code1,code2）则丢弃该问题。
+def _comment_span(line, lang):
+    """返回该行**真正注释**的起始列号（1-based）；没有则返回 None。
 
-    返回 (保留的问题, 豁免计数)。只按"该行原文含标记"判定——标记写进字符串
-    字面量也会生效，但那是用户主动写下的行为，不猜意图。
+    单行词法：按语言 profile 的字符串规则跳过字符串内容，注释符出现在字符串外
+    才算注释起点。guard:skip 只有落在注释区内才可能生效——写在字符串字面量里的
+    `guard:skip` 是数据，不是豁免（否则一行 `s = "guard:skip"` 就能把该行的问题
+    全部静默吞掉）。只做单行分析：问题行按定义是代码行，多行串/块注释内部不会
+    产生 L1~L3 的机械发现。
+    """
+    prof = bracket_lint.PROFILES.get(lang) or EXTRA_PROFILES.get(lang) \
+        or bracket_lint.PROFILES["plain"]
+    opens = sorted({s[0] for s in prof.get("strings", [])}, key=len, reverse=True)
+    comment_tokens = sorted(
+        set(prof.get("line", [])) | {b[0] for b in prof.get("block", [])},
+        key=len, reverse=True)
+    close_of = {s[0]: (s[1], s[2]) for s in prof.get("strings", [])}
+    i, n = 0, len(line)
+    while i < n:
+        for tok in comment_tokens:
+            if line.startswith(tok, i):
+                return i + 1
+        for tok in opens:
+            if line.startswith(tok, i):
+                close, escapes = close_of[tok]
+                j = i + len(tok)
+                while j < n:
+                    if escapes and line[j] == "\\":
+                        j += 2
+                        continue
+                    if line.startswith(close, j):
+                        break
+                    j += 1
+                if j >= n:
+                    return None  # 该行结尾仍在字符串里（多行串）：本行没有注释
+                i = j + len(close)
+                break
+        else:
+            i += 1
+    return None
+
+
+def _exempt_filter(src, issues, lang):
+    """行内豁免：问题行的**注释里**含 guard:skip（或 guard:skip=code1,code2）才豁免。
+
+    返回 (保留的问题, 豁免计数)。标记必须出现在真实注释上下文中——字符串字面量
+    里的 guard:skip 不生效（见 _comment_span）。
     """
     lines = src.split("\n")
     kept, dropped = [], 0
     for iss in issues:
         ln = iss.get("line")
         text = lines[ln - 1] if isinstance(ln, int) and 1 <= ln <= len(lines) else ""
-        m = re.search(r"guard:skip(?:=(\S+))?", text)
-        if m:
-            codes = set(m.group(1).split(",")) if m.group(1) else None
-            if codes is None or iss.get("code") in codes:
-                dropped += 1
-                continue
+        col = _comment_span(text, lang)
+        if col is not None:
+            m = re.search(r"guard:skip(?:=(\S+))?", text[col - 1:])
+            if m:
+                codes = set(m.group(1).split(",")) if m.group(1) else None
+                if codes is None or iss.get("code") in codes:
+                    dropped += 1
+                    continue
         kept.append(iss)
     return kept, dropped
 
@@ -619,8 +676,9 @@ def check_source(label, src, lang=None, max_issues=5, real_file=True):
             if not res["tool_error"]:
                 res["tool_error"] = "L3 形态检查异常: %r" % (e,)
 
-    # 行内豁免（guard:skip）：最后统一过滤，只作用于 L1~L3 的机械发现
-    res["issues"], res["exempted"] = _exempt_filter(src, res["issues"])
+    # 行内豁免（guard:skip）：最后统一过滤，只作用于 L1~L3 的机械发现；
+    # 标记必须在该行的真实注释里，字符串字面量里的不算
+    res["issues"], res["exempted"] = _exempt_filter(src, res["issues"], lang)
 
     res["issues"] = res["issues"][:50]
     res["ok"] = not res["issues"]
@@ -652,25 +710,34 @@ def _decode(data: bytes) -> str:
 
 
 # --------------------------------------------------------------------------
-# L4：项目专属断言（<project>/guard_asserts.py，约定 run(paths) -> [(path, line, msg)...]）
+# L4：项目专属断言（显式 --asserts <路径>，约定 run(paths) -> [(path, line, msg)...]；
+# 默认不加载——仓库内容不构成执行授权，见 load_asserts）
 # --------------------------------------------------------------------------
 
-def load_asserts(project):
-    p = os.path.join(project, "guard_asserts.py")
-    if not os.path.isfile(p):
+def load_asserts(path):
+    """加载显式指定的断言模块（--asserts）。返回 (run 函数|None, 错误|None)。
+
+    安全边界（收官体检 A-01）：只加载调用方**显式指定路径**的断言文件——
+    仓库根目录的 guard_asserts.py 绝不自动加载。否则任何 PR 新增该文件，
+    就能在开发者 `git commit` 时（pre-commit / git hook 以仓库根为 cwd 调本工具）
+    在其本机执行任意代码。显式传参 = 运维者本人的授权，仓库内容不算。
+    """
+    if not path:
         return None, None
+    if not os.path.isfile(path):
+        return None, "断言文件不存在: %s" % path
     import importlib.util
-    spec = importlib.util.spec_from_file_location("guard_asserts_%d" % os.getpid(), p)
+    spec = importlib.util.spec_from_file_location("guard_asserts_%d" % os.getpid(), path)
     if spec is None or spec.loader is None:
-        return None, "guard_asserts.py 无法加载: %s" % p
+        return None, "断言文件无法加载: %s" % path
     mod = importlib.util.module_from_spec(spec)
     try:
         spec.loader.exec_module(mod)
     except Exception as e:
-        return None, "guard_asserts.py 加载失败: %r" % (e,)
+        return None, "断言文件加载失败: %r" % (e,)
     fn = getattr(mod, "run", None)
     if not callable(fn):
-        return None, "guard_asserts.py 缺 run(paths) 函数"
+        return None, "断言文件缺 run(paths) 函数"
     return fn, None
 
 
@@ -729,20 +796,56 @@ def render(res, lines=None):
     return "\n".join(out)
 
 
-def summarize(results):
+def summarize(results, truncated=0):
     n_bad = sum(1 for r in results if not r["ok"] and not r["skipped"])
     n_ok = sum(1 for r in results if r["ok"] and not r["skipped"])
     n_skip = sum(1 for r in results if r["skipped"])
     n_deg = sum(len(r["degraded"]) for r in results)
     return {"files": len(results), "ok": n_ok, "bad": n_bad, "skipped": n_skip,
-            "degraded": n_deg,
+            "degraded": n_deg, "truncated": truncated,
             "tool_errors": [r["tool_error"] for r in results if r["tool_error"]]}
 
 
-def exit_code_for(results):
-    """1=代码问题（优先）；2=工具故障；0=通过。"""
+def degraded_kind(msg):
+    """降级条目分类：严格模式下哪些拦、哪些可被 --allow-missing-tools 显式放行。"""
+    if ("不可用" in msg or "无 PyYAML" in msg or "无 tomllib" in msg
+            or "自检/管道模式" in msg):
+        return "missing-tool"   # 环境缺工具：可用 --allow-missing-tools 显式放行
+    if "超大文件" in msg:
+        return "big-file"       # 深检被跳过：严格模式下必须拦
+    if "未知语言" in msg:
+        return "unknown-lang"   # 根本没有对应检查器：严格模式下必须拦
+    return "other"              # 未知降级一律从严：严格模式下必须拦
+
+
+def strict_blockers(results, truncated, allow_missing_tools):
+    """严格模式下导致"未真正查完"的问题清单（非空 => 退出码非 0）。"""
+    blockers = []
+    if truncated:
+        blockers.append("文件数超过上限 %d，已截断 %d 个未检查" % (MAX_FILES, truncated))
+    seen = set()
+    for r in results:
+        for d in r["degraded"]:
+            kind = degraded_kind(d)
+            if kind == "missing-tool" and allow_missing_tools:
+                continue
+            key = (kind, d)
+            if key not in seen:
+                seen.add(key)
+                blockers.append(d)
+    return blockers
+
+
+def exit_code_for(results, strict=False, allow_missing_tools=False, truncated=0):
+    """1=代码问题（优先）；2=工具故障 / 严格模式下检查不完整；0=通过。
+
+    严格模式（CI / pre-commit / 聚合门禁）：截断、超大文件降级、未知语言、
+    工具缺失（未显式放行）都意味着"没有真正完成检查"，一律 2——没有真正
+    完成检查，就不能显示全绿。"""
     if any(r["issues"] for r in results):
         return 1
+    if strict and strict_blockers(results, truncated, allow_missing_tools):
+        return 2
     if any(r["tool_error"] for r in results):
         return 2
     return 0
@@ -810,16 +913,17 @@ def staged_files():
 _HOOK_PATH_KEYS = {"file_path", "path", "notebook_path", "filePath"}
 
 
-def _extract_hook_paths(obj, out):
+def _extract_hook_paths(obj, out, path_key=False):
+    """从 hook payload 里抽文件路径。path_key=True 表示当前值挂在路径键下——
+    此时列表里的字符串也是路径（`file_path: [a, b]` 与 `file_path: a` 等价）。"""
     if isinstance(obj, dict):
         for k, v in obj.items():
-            if k in _HOOK_PATH_KEYS and isinstance(v, str) and v:
-                out.append(v)
-            else:
-                _extract_hook_paths(v, out)
+            _extract_hook_paths(v, out, path_key=k in _HOOK_PATH_KEYS)
     elif isinstance(obj, list):
         for v in obj:
-            _extract_hook_paths(v, out)
+            _extract_hook_paths(v, out, path_key=path_key)
+    elif isinstance(obj, str) and obj and path_key:
+        out.append(obj)
 
 
 def hook_main():
@@ -847,6 +951,11 @@ def hook_main():
             paths.append(p)
         if len(paths) >= MAX_HOOK_FILES:
             break
+    if len(found) > MAX_HOOK_FILES:
+        # fail-open 契约下钩子不拦，但绝不静默截断：闸 2/3 会对全量兜底
+        print("structure_guard --from-hook: 输入文件 %d 个，超过上限 %d，"
+              "本次只检查前 %d 个（其余由 pre-commit / CI 全量兜底）"
+              % (len(found), MAX_HOOK_FILES, MAX_HOOK_FILES), file=sys.stderr)
     if not paths:
         return 0
     results = []
@@ -908,6 +1017,9 @@ _SELFTEST = [
     ("lisp 字符串含括号（合法）", "x.lsp", '(princ "(hello)")\n', True),
     ("md 文档跳过", "x.md", "# 标题（全角括号合法）\n", True),
     ("豁免：同行 guard:skip", "x.py", "x = (1  # guard:skip\n", True),
+    ("豁免：字符串里的 guard:skip 不生效", "x.py", 'x = ("guard:skip"\n', False),
+    ("豁免：字符串里的 guard:skip 不生效(引号后注释)", "x.py",
+     's = "guard:skip"\nx = (1\n', False),
     ("豁免：指定问题码命中", "x.lsp",
      "(defun f ()\n  (setq y x 2)  ; guard:skip=setq-odd-args\n  (list y))\n", True),
     ("豁免：指定问题码不命中仍报", "x.py", "x = (1  # guard:skip=fullwidth\n", False),
@@ -936,6 +1048,8 @@ _SELFTEST = [
     ("无后缀脚本 shebang 语法错误(L2)", "my_script", "#!/usr/bin/env python3\nx = 1 + * 2\n", False),
     ("ps1 正常", "x.ps1", "function Get-ProcessName { Get-Process | Select-Object -First 1 }\n", True),
     ("ps1 括号失衡(L1)", "x.ps1", "function Get-ProcessName { Get-Process | Select-Object -First 1\n", False),
+    ("ps1 反引号转义引号不误报(A-04)", "x.ps1", '$m = "before `" after"\nWrite-Output $m\n', True),
+    ("ps1 反斜杠不转义引号(A-04)", "x.ps1", '$m = "before \\" after"\n', False),
 ]
 
 # 伪路径下 L1 的 plain profile 未闭合串不报警——md 用例依赖 skipped 分支，不受影响
@@ -978,11 +1092,18 @@ def main(argv=None) -> int:
     ap.add_argument("--staged", action="store_true", help="检查 git 暂存的代码文件")
     ap.add_argument("--from-hook", action="store_true",
                     help="agent hook 模式：从 stdin JSON 取文件路径；有问题退出 2")
-    ap.add_argument("--project", default=".",
-                    help="项目根（用于加载 guard_asserts.py，默认当前目录）")
+    ap.add_argument("--asserts", default=None, metavar="PATH",
+                    help="显式加载断言层（L4）：run(paths) -> [(path, line, msg)...]。"
+                         "默认不加载——仓库内容不构成执行授权，绝不自动执行项目根的 guard_asserts.py")
     ap.add_argument("--lang", default=None, help="强制语言 profile（默认按扩展名判断）")
     ap.add_argument("--json", action="store_true", help="输出 JSON，便于程序/agent 消费")
     ap.add_argument("--quiet", action="store_true", help="只输出有问题的文件")
+    ap.add_argument("--strict", action="store_true",
+                    help="严格模式：截断 / 降级 / 未知语言导致非零退出（CI、pre-commit、"
+                         "聚合门禁必带——没真正查完就不算通过）")
+    ap.add_argument("--allow-missing-tools", action="store_true",
+                    help="配合 --strict：显式放行'工具缺席'类降级（如 runner 无 node / "
+                         "PyYAML）；截断、超大文件、未知语言仍会拦")
     ap.add_argument("--max", type=int, default=5, help="L1 每文件最多报告几处（默认 5）")
     ap.add_argument("--color", choices=["auto", "always", "never"], default="auto")
     ap.add_argument("--selftest", action="store_true", help="跑内置用例，验证本工具自身可信")
@@ -1017,7 +1138,9 @@ def main(argv=None) -> int:
             print("structure_guard 工具故障：%s" % terr, file=sys.stderr)
             return 2
         files = [f for f in files if is_supported_file(f)]
-        truncated = 0
+        truncated = max(0, len(files) - MAX_FILES)
+        if truncated:
+            files = files[:MAX_FILES]  # 暂存文件同样不静默截断：严格模式据此拦下
     else:
         ap.print_help()
         return 3
@@ -1027,11 +1150,11 @@ def main(argv=None) -> int:
             print("structure_guard: 没有可检查的代码文件")
         return 0
     if truncated:
-        print("structure_guard: 文件数超过上限 %d，已截断（建议缩小范围）" % MAX_FILES,
-              file=sys.stderr)
+        print("structure_guard: 文件数超过上限 %d，已截断 %d 个未检查（建议缩小范围或分批）"
+              % (MAX_FILES, truncated), file=sys.stderr)
 
-    # L4 断言层（可选，项目提供 guard_asserts.py 才生效）
-    asserts_fn, terr = load_asserts(args.project)
+    # L4 断言层（可选）：只有显式 --asserts 才加载，默认零执行
+    asserts_fn, terr = load_asserts(args.asserts)
     if terr:
         print("structure_guard 工具故障：%s" % terr, file=sys.stderr)
         return 2
@@ -1083,14 +1206,28 @@ def main(argv=None) -> int:
                             "tool_error": None, "suggestion": ""})
 
     if args.json:
-        print(json.dumps({"summary": summarize(results), "results": results},
+        print(json.dumps({"summary": summarize(results, truncated), "results": results},
                          ensure_ascii=False, indent=2))
     elif not args.quiet:
-        s = summarize(results)
-        print("  %d 个通过，%d 个有问题，%d 个跳过；降级 %d 项"
-              % (s["ok"], s["bad"], s["skipped"], s["degraded"]))
+        s = summarize(results, truncated)
+        print("  %d 个通过，%d 个有问题，%d 个跳过；降级 %d 项%s"
+              % (s["ok"], s["bad"], s["skipped"], s["degraded"],
+                 ("，截断 %d 个未检查" % s["truncated"]) if s["truncated"] else ""))
+        if s["degraded"] or s["truncated"]:
+            print("  注意：本次检查不完整（存在降级/截断），不能视为完整检查通过"
+                  + ("；--strict 模式下会以此拦下" if not args.strict else ""))
 
-    return exit_code_for(results)
+    if args.strict:
+        blockers = strict_blockers(results, truncated, args.allow_missing_tools)
+        if blockers:
+            print("structure_guard 严格模式：检查不完整，按未通过处理（退出码 2）：",
+                  file=sys.stderr)
+            for b in blockers:
+                print("  - %s" % b, file=sys.stderr)
+
+    return exit_code_for(results, strict=args.strict,
+                         allow_missing_tools=args.allow_missing_tools,
+                         truncated=truncated)
 
 
 def _init_stdout():

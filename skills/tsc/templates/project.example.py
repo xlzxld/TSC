@@ -8,6 +8,13 @@
     - 直接写项目通用命令（如 python3 -m pytest -q 或 npm test）。
     - 跨平台兼容：若首令牌 python/python3 在当前系统 PATH 中不存在，tsc.py verify 会自动回退到当前解释器执行，无需手工拼接 sys.executable。
     - 注意：AGENTS.md 的 §2 表格与这里登记的命令字面量必须保持完全一致，否则 check-config 会报错。
+
+安全说明：
+    - 本文件只会被 **AST 白名单解析**（doctor / check-config / verify / CI 同源）：
+      只认下面四条与 GATE_TIMEOUTS 的常量赋值；import、函数调用、属性访问、
+      变量引用一律被拒（退出码 3）——配置文件不是可执行文件，写动态值不会生效。
+    - 每条命令的执行超时默认 600s，可按步覆盖（键名须与上面的大写名一致）：
+      GATE_TIMEOUTS = {"TEST_CMD": 300}
 """
 
 __all__ = ["FMT_CHECK_CMD", "LINT_CMD", "TEST_CMD", "BUILD_CMD"]

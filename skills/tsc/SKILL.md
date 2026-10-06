@@ -40,7 +40,10 @@ metadata:
 
 - 项目 `AGENTS.md` 带 `<!-- tsc-managed-contract:v4 -->` 标记 = TSC 托管，可 install/sync。
 - **没有标记 = 外部文档，默认只读**：`sync`/`install` 会拒绝并输出冲突摘要；只有用户明确确认后 `install --force` 才接管。
+- **legacy 需要两个独立 TSC 历史特征**（合法历史 `.agents/VERSION` + 部署痕迹如 `.agents/.source`）；只有 `.agents/VERSION` 一个特征时仍按外部文档处理，绝不自动接管。
+- install/sync 是单事务：备份先行、失败自动恢复原状；rollback 只撤销最近一次成功事务。
 - 项目里带 `tsc-managed` 标记的执法包文件随本体更新；被项目改掉标记的文件永不覆盖。
+- `.agents/project.py` 只会被 **AST 白名单解析**（常量），任何命令都不执行它。
 - 任何删除都先问用户（rollback 删除的仅限上次 install/sync 新建的文件）。
 
 ## 退出码
@@ -48,9 +51,9 @@ metadata:
 | 码 | 含义 | 你要做的 |
 | --- | --- | --- |
 | 0 | 成功 / 已是最新 | 报结论 |
-| 1 | 需人工处理（§2 结构变更 / 外部 AGENTS.md 未接管 / §2 与 project.py 不一致） | 停下转述脚本列出的差异，等用户决定 |
-| 2 | IO / 编码 / 权限错误 | 停下原样转述 |
-| 3 | 状态非法（缺 §2、门禁全未配置、上游无效、无可回滚记录） | 按提示修复 |
+| 1 | 需人工处理（§2 结构变更 / 外部 AGENTS.md 未接管 / §2 与 project.py 不一致或未适配 / update 的 git 操作失败） | 停下转述脚本列出的差异，等用户决定 |
+| 2 | IO / 编码 / 权限错误（含事务失败已自动回滚、回滚未彻底但清单已保留） | 停下原样转述 |
+| 3 | 状态非法（缺 §2、门禁全未配置、上游无效、无可回滚记录、project.py 含白名单外的可执行结构、rollback/update 传了 --dry-run） | 按提示修复 |
 | 124 | 门禁命令超时被终止 | 转述；确需更久用 `--timeout` 或 project.py 的 `GATE_TIMEOUTS` 放宽 |
 
 ## 写完代码后的自动动作（不需要用户开口）
@@ -59,7 +62,7 @@ metadata:
 2. `verify` 过了 → 跑 `check-config`（§2 与 project.py 没跑偏）。
 3. 提交前 `verify` 必须退出码 0，否则不许提交、不许说"已完成"。
 
-唯一要先问用户的：`install` / `sync` 首次写入（先 `--dry-run` 给用户看）。`verify`/`status`/`doctor` 只读，直接跑。
+唯一要先问用户的：`install` / `sync` 首次写入（先 `--dry-run` 给用户看）。`status`/`doctor` 只读、`verify` 是**执行型门禁**（会真实运行 §2 的门禁命令），都直接跑。
 
 新装项目 §2 全是 `[自动填充]`、`.agents/project.py` 四条命令全 `None`——两处都要填成本项目真实取值（按 `references/BOOTSTRAP.md` 探测），否则 `verify` 退出码 3（未配置不是通过）。填完代跑 `check-config` 确认同源。
 
@@ -67,4 +70,4 @@ metadata:
 
 - `references/AUDIT-SPEC.md`：体检细则（说"体检"时）。
 - `references/BOOTSTRAP.md`：项目探测与 §2 填充流程（接入契约时）。
-- 结构门禁退出码：0=通过；1=代码结构问题；2=工具自身故障（告警放行）；3=配置非法；hook 模式 fail-open。行内豁免注释 `guard:skip`。
+- 结构门禁退出码：0=通过；1=代码结构问题；2=工具故障或（--strict 下）检查不完整；3=配置非法；hook 模式 fail-open。行内豁免注释 `guard:skip`（只在真实注释里生效，字符串字面量里的不算）。CI / pre-commit / 聚合门禁的调用统一带 `--strict`。

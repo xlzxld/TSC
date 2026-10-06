@@ -14,6 +14,7 @@
 """
 
 import json
+import os
 import re
 import sys
 import tempfile
@@ -125,11 +126,31 @@ class OwnershipTests(unittest.TestCase):
         (self.tmp / "AGENTS.md").write_text(AGENTS_SAMPLE, encoding="utf-8")
         self.assertEqual(tsc.contract_ownership(self.tmp), "managed")
 
-    def test_version_file_without_marker_is_legacy(self):
+    def test_version_file_with_tsc_evidence_is_legacy(self):
+        """legacy 需要 ≥2 个独立 TSC 历史特征：合法历史版本号 + 部署痕迹。"""
         (self.tmp / "AGENTS.md").write_text(AGENTS_SAMPLE.replace(
             "<!-- tsc-managed-contract:v4 -->\n\n", ""), encoding="utf-8")
         (self.tmp / ".agents").mkdir()
         (self.tmp / ".agents" / "VERSION").write_text("3.3.2\n", encoding="utf-8")
+        # 特征 B：.agents/.source（TSC install 必写的 provenance）
+        (self.tmp / ".agents" / ".source").write_text("/old/skill\n", encoding="utf-8")
+        self.assertEqual(tsc.contract_ownership(self.tmp), "legacy")
+
+    def test_version_file_alone_is_foreign(self):
+        """只有 .agents/VERSION（哪怕格式合法）≠ TSC 项目：凑不齐两个特征按 foreign。"""
+        (self.tmp / "AGENTS.md").write_text(AGENTS_SAMPLE.replace(
+            "<!-- tsc-managed-contract:v4 -->\n\n", ""), encoding="utf-8")
+        (self.tmp / ".agents").mkdir()
+        (self.tmp / ".agents" / "VERSION").write_text("3.3.2\n", encoding="utf-8")
+        self.assertEqual(tsc.contract_ownership(self.tmp), "foreign")
+
+    def test_version_and_legacy_files_is_legacy(self):
+        """特征 B 的另一形态：根目录残留旧版契约文件（AUDIT-SPEC.md）。"""
+        (self.tmp / "AGENTS.md").write_text(AGENTS_SAMPLE.replace(
+            "<!-- tsc-managed-contract:v4 -->\n\n", ""), encoding="utf-8")
+        (self.tmp / ".agents").mkdir()
+        (self.tmp / ".agents" / "VERSION").write_text("3.3.2\n", encoding="utf-8")
+        (self.tmp / "AUDIT-SPEC.md").write_text("# old\n", encoding="utf-8")
         self.assertEqual(tsc.contract_ownership(self.tmp), "legacy")
 
     def test_plain_agents_md_is_foreign(self):
@@ -484,7 +505,19 @@ class GitWorktreeTests(unittest.TestCase):
     """
 
     def test_master_layout_finds_repo_root(self):
-        self.assertEqual(tsc.git_worktree_of(SKILL), REPO)
+        """技能目录是仓库子目录时，worktree 解析要落回仓库根。
+
+        用临时布局断言——干净 clone / 无 .git 的副本环境同样成立（verify 在
+        干净仓库必须稳定退出 0，不能依赖本机仓库恰好带着 .git）。"""
+        import shutil
+        tmp = Path(tempfile.mkdtemp(prefix="tsc-wt-"))
+        self.addCleanup(shutil.rmtree, tmp, True)
+        (tmp / ".git").mkdir()
+        skill = tmp / "skills" / "tsc"
+        skill.mkdir(parents=True)
+        self.assertEqual(tsc.git_worktree_of(skill), tmp)
+        if (REPO / ".git").exists():  # 真实仓库是 git 安装时一并校验
+            self.assertEqual(tsc.git_worktree_of(SKILL), REPO)
 
     def test_plain_dir_has_no_worktree(self):
         import shutil
@@ -590,12 +623,18 @@ class SkillPackagingTests(unittest.TestCase):
             self.assertNotIn("127.0.0.1:7897", tsc.read_text(REPO / rel), rel)
 
     def test_version_single_source(self):
-        # P2-10：版本发布真源只有技能目录 VERSION；.agents/VERSION 只是部署生成物
-        self.assertFalse((REPO / ".agents" / "VERSION").exists() and
-                         tsc.read_text(REPO / ".agents" / "VERSION").strip() !=
-                         tsc.upstream_version(SKILL),
-                         ".agents/VERSION 若存在必须与技能 VERSION 一致")
-        self.assertEqual(tsc.upstream_version(SKILL), "5.1.0")
+        # P2-10 + 收官体检 A-07：版本真源是技能 VERSION；所有头注动态比对，不硬编码
+        # （下次发版不红），且模板/实例 AGENTS.md 的版本头注漂移在 CI 里也能抓到
+        ver = (SKILL / "VERSION").read_text(encoding="utf-8").strip()
+        self.assertRegex(ver, r"^\d+\.\d+\.\d+$")
+        local = REPO / ".agents" / "VERSION"  # 本机自举生成、被 gitignore；存在则必须一致
+        if local.exists():
+            self.assertEqual(tsc.read_text(local).strip(), ver)
+        for rel in ("skills/tsc/templates/AGENTS.md", "AGENTS.md"):
+            m = re.search(r"版本 v(\d+\.\d+\.\d+)", tsc.read_text(REPO / rel))
+            self.assertIsNotNone(m, "%s 缺版本头注" % rel)
+            self.assertEqual(m.group(1), ver, "%s 版本头注与 VERSION 漂移" % rel)
+        self.assertEqual(tsc.upstream_version(SKILL), ver)
 
     def test_contract_line_budget(self):
         """契约行数预算：母版与实例都必须 < 80 行（`wc -l` LF 口径）。
@@ -749,7 +788,10 @@ class TemplateSanitizationTests(unittest.TestCase):
         self.assertIn("branches: [trunk]", out)
 
 
-class InterpreterRetargetTests(unittest.TestCase):
+class InterpreterHeadRegexTests(unittest.TestCase):
+    """_INTERPRETER_HEAD 正则本身的匹配口径（与 InterpreterRetargetTests 分开——
+    曾因同名类把前一个类整个遮蔽，5 条回退测试从未运行，收官体检 A-05）。"""
+
     def test_retarget_matches_exe_and_case(self):
         m = tsc._INTERPRETER_HEAD.match("python.exe -m pytest")
         self.assertIsNotNone(m)
@@ -807,6 +849,563 @@ class RowToKeyEnglishTests(unittest.TestCase):
         self.assertEqual(table.get("LINT_CMD"), "ruff check")
         self.assertEqual(table.get("TEST_CMD"), "pytest")
         self.assertEqual(table.get("BUILD_CMD"), "cargo build")
+
+
+class SafeProjectPathTests(unittest.TestCase):
+    """路径安全唯一入口：拒绝绝对路径、`..`、symlink/junction 逃逸。"""
+
+    def setUp(self):
+        import shutil
+        self.tmp = Path(tempfile.mkdtemp(prefix="tsc-safe-"))
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+
+    def test_plain_relative_path_ok(self):
+        for rel in (".agents/VERSION", "AGENTS.md", ".github/workflows/gate.yml",
+                    "a/b/c.txt"):
+            target, resolved = tsc.safe_project_path(self.tmp, rel)
+            self.assertTrue(str(resolved).startswith(str(self.tmp.resolve())))
+
+    def test_absolute_paths_rejected(self):
+        for rel in ("/etc/passwd", "C:/Windows/system32", "C:\\Windows\\system32"):
+            with self.assertRaises(tsc.UnsafeProjectPath):
+                tsc.safe_project_path(self.tmp, rel)
+
+    def test_dotdot_rejected(self):
+        for rel in ("../escape", "a/../../escape", "..\\escape", "a/..", ".."):
+            with self.assertRaises(tsc.UnsafeProjectPath):
+                tsc.safe_project_path(self.tmp, rel)
+
+    def test_empty_rejected(self):
+        for rel in ("", ".", "./"):
+            with self.assertRaises(tsc.UnsafeProjectPath):
+                tsc.safe_project_path(self.tmp, rel)
+
+    def _make_link(self, link_dir, target_dir):
+        """优先真 symlink；Windows 无特权时退回 junction；都不行返回 False。"""
+        try:
+            os.symlink(str(target_dir), str(link_dir), target_is_directory=True)
+            return True
+        except (OSError, NotImplementedError, AttributeError):
+            pass
+        try:
+            import _winapi
+            _winapi.CreateJunction(str(target_dir), str(link_dir))
+            return True
+        except (OSError, ImportError):
+            return False
+
+    def test_symlink_escape_rejected(self):
+        import shutil
+        outside = Path(tempfile.mkdtemp(prefix="tsc-out-"))
+        self.addCleanup(shutil.rmtree, outside, True)
+        (outside / "victim.txt").write_text("x", encoding="utf-8")
+        link = self.tmp / ".agents"
+        if not self._make_link(link, outside):
+            self.skipTest("本机既不能建 symlink 也不能建 junction，跳过")
+        with self.assertRaises(tsc.UnsafeProjectPath):
+            tsc.safe_project_path(self.tmp, ".agents/VERSION")
+        # 受管理路径逐层检查：深层路径也会在 .agents 这一层被拦
+        with self.assertRaises(tsc.UnsafeProjectPath):
+            tsc.safe_project_path(self.tmp, ".agents/sub/deep.txt")
+
+    def test_symlink_inside_root_also_rejected(self):
+        """指向项目内部其它目录的 symlink 同样拒绝——受管理路径不允许被重定向。"""
+        inside = self.tmp / "elsewhere"
+        inside.mkdir()
+        link = self.tmp / ".github"
+        if not self._make_link(link, inside):
+            self.skipTest("本机既不能建 symlink 也不能建 junction，跳过")
+        with self.assertRaises(tsc.UnsafeProjectPath):
+            tsc.safe_project_path(self.tmp, ".github/workflows/gate.yml")
+
+
+class ProjectConfigAstTests(unittest.TestCase):
+    """project.py 只允许 AST 白名单常量解析，绝不 exec（配置文件不是可执行文件）。"""
+
+    def setUp(self):
+        import shutil
+        self.tmp = Path(tempfile.mkdtemp(prefix="tsc-cfg-"))
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+
+    def parse(self, text):
+        p = self.tmp / "project.py"
+        p.write_text(text, encoding="utf-8")
+        return tsc.parse_project_config(p)
+
+    def test_benign_config_parses(self):
+        cfg, err = self.parse(
+            '"""doc"""\n'
+            '__all__ = ["TEST_CMD"]\n'
+            'FMT_CHECK_CMD = None\nLINT_CMD = "ruff check ."\n'
+            'TEST_CMD = "pytest -q"\nBUILD_CMD = None\n'
+            'GATE_TIMEOUTS = {"TEST_CMD": 300}\n')
+        self.assertIsNone(err)
+        self.assertEqual(cfg["LINT_CMD"], "ruff check .")
+        self.assertEqual(cfg["GATE_TIMEOUTS"], {"TEST_CMD": 300})
+
+    def test_malicious_import_never_runs(self):
+        marker = self.tmp / "pwned.txt"
+        cfg, err = self.parse(
+            'import os\n'
+            'os.system("echo pwned > %s")\n'
+            'TEST_CMD = "x"\n' % marker.as_posix())
+        self.assertIsNone(cfg)
+        self.assertIn("import", err)
+        self.assertFalse(marker.exists(), "AST 解析路径绝不能执行任何代码")
+
+    def test_malicious_call_rejected(self):
+        cfg, err = self.parse('TEST_CMD = __import__("os").getcwd()\n')
+        self.assertIsNone(cfg)
+        self.assertIn("禁止函数调用", err)
+
+    def test_malicious_attribute_rejected(self):
+        cfg, err = self.parse('import sys\nTEST_CMD = sys.executable\n')
+        self.assertIsNone(cfg)
+
+    def test_malicious_print_rejected(self):
+        cfg, err = self.parse('print("hello")\nTEST_CMD = "x"\n')
+        self.assertIsNone(cfg)
+
+    def test_function_def_rejected(self):
+        cfg, err = self.parse('def run():\n    pass\nTEST_CMD = "x"\n')
+        self.assertIsNone(cfg)
+
+    def test_name_reference_rejected(self):
+        cfg, err = self.parse('BASE = "a"\nTEST_CMD = BASE + "b"\n')
+        self.assertIsNone(cfg)
+
+    def test_gate_timeouts_must_be_dict(self):
+        cfg, err = self.parse('GATE_TIMEOUTS = "not-a-dict"\n')
+        self.assertIsNone(cfg)
+        self.assertIn("GATE_TIMEOUTS", err)
+
+    def test_syntax_error_reported(self):
+        cfg, err = self.parse('TEST_CMD = "unclosed\n')
+        self.assertIsNone(cfg)
+        self.assertIn("语法", err)
+
+
+class BranchRenderingTests(unittest.TestCase):
+    """gate.yml 的 branches 渲染必须 YAML-safe：特殊分支名绝不裸插值。"""
+
+    def setUp(self):
+        import shutil
+        self.tmp = Path(tempfile.mkdtemp(prefix="tsc-br-"))
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+
+    SIMPLE = ("main", "master", "trunk", "develop", "release-1.2.3", "v1_x")
+
+    def test_simple_branches_stay_bare(self):
+        for name in self.SIMPLE:
+            self.assertEqual(tsc.render_branches_entry(name), "branches: [%s]" % name)
+
+    def test_special_branches_are_single_quoted(self):
+        cases = {
+            "release/1,2": "branches: ['release/1,2']",
+            "fix]ing": "branches: ['fix]ing']",
+            "main #not-comment": "branches: ['main #not-comment']",
+            "a{b}c": "branches: ['a{b}c']",
+            "sp ace": "branches: ['sp ace']",
+            "quo'te": "branches: ['quo''te']",  # YAML 单引号内 ' 转义为 ''
+            "a:b": "branches: ['a:b']",
+        }
+        for name, expected in cases.items():
+            self.assertEqual(tsc.render_branches_entry(name), expected, name)
+
+    def test_debranch_round_trips_every_variant(self):
+        for name in list(self.SIMPLE) + ["release/1,2", "quo'te", "sp ace", "a{b}c"]:
+            rendered = tsc.render_branches_entry(name)
+            back = rendered
+            for variant in tsc._branch_variants(name):
+                back = back.replace(variant, "branches: [main]")
+            self.assertEqual(back, "branches: [main]", name)
+
+    def test_gate_yml_rendering_with_special_branch(self):
+        agents = AGENTS_SAMPLE.replace("| 主干分支 | master |", "| 主干分支 | release/1,2 |")
+        content = tsc.enforce_template_content(
+            "templates/enforcement/gate.yml", self.tmp, SKILL, agents)
+        self.assertIsNotNone(content)
+        self.assertIn("branches: ['release/1,2']", content)
+        self.assertNotIn("branches: [release/1,2]", content)  # 裸插值会产生坏 YAML
+
+
+class CommitlintOptionalTests(unittest.TestCase):
+    """commitlint 是可选适配层：项目已有提交规范配置时不部署。"""
+
+    def setUp(self):
+        import shutil
+        self.tmp = Path(tempfile.mkdtemp(prefix="tsc-cl-"))
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+
+    def test_non_node_never_wants_commitlint(self):
+        wanted, _ = tsc.commitlint_wanted(self.tmp)
+        self.assertFalse(wanted)
+
+    def test_plain_node_project_wants(self):
+        (self.tmp / "package.json").write_text('{"name": "x"}', encoding="utf-8")
+        self.assertTrue(tsc.commitlint_wanted(self.tmp)[0])
+
+    def test_existing_commitlint_config_blocks_deploy(self):
+        (self.tmp / "package.json").write_text('{"name": "x"}', encoding="utf-8")
+        (self.tmp / ".commitlintrc.json").write_text("{}", encoding="utf-8")
+        wanted, reason = tsc.commitlint_wanted(self.tmp)
+        self.assertFalse(wanted)
+        self.assertIn(".commitlintrc", reason)
+        deploy, update, skip = tsc._enforce_actions(self.tmp, SKILL, AGENTS_SAMPLE)
+        self.assertNotIn("commitlint.config.js", [n for n, _ in deploy])
+
+    def test_taken_over_commitlint_config_reports_takeover(self):
+        """项目接管过的 commitlint.config.js：走执法包三态规则，显式跳过不覆盖。"""
+        (self.tmp / "package.json").write_text('{"name": "x"}', encoding="utf-8")
+        tsc.deploy_enforcement(self.tmp, SKILL, AGENTS_SAMPLE, dry_run=False)
+        target = self.tmp / "commitlint.config.js"
+        lines = [ln for ln in tsc.read_text(target).splitlines()
+                 if not tsc.is_marker_line(ln, tsc.MANAGED_MARKER)]
+        tsc.write_text_atomic(target, "\n".join(lines) + "\n// 项目接管\n")
+        deploy, update, skip = tsc._enforce_actions(self.tmp, SKILL, AGENTS_SAMPLE)
+        self.assertEqual((deploy, [n for n, _ in update]), ([], []))
+        self.assertEqual([n for n, _ in skip], ["commitlint.config.js"])
+
+    def test_lockfile_pm_detection(self):
+        self.assertIsNone(tsc.detect_lockfile_pm(self.tmp))
+        (self.tmp / "pnpm-lock.yaml").write_text("", encoding="utf-8")
+        self.assertEqual(tsc.detect_lockfile_pm(self.tmp), "pnpm")
+
+
+class UpstreamValidationTests(unittest.TestCase):
+    """上游完整校验：必需产物清单 + 关键内容格式，残缺上游一票否决。"""
+
+    def test_real_skill_passes(self):
+        self.assertEqual(tsc.validate_upstream(SKILL), [])
+
+    def test_missing_required_artifact_detected(self):
+        import shutil
+        broken = Path(tempfile.mkdtemp(prefix="tsc-up-"))
+        self.addCleanup(shutil.rmtree, broken, True)
+        shutil.copytree(SKILL, broken / "tsc", ignore=shutil.ignore_patterns("__pycache__"))
+        (broken / "tsc" / "references" / "BOOTSTRAP.md").unlink()
+        missing = tsc.validate_upstream(broken / "tsc")
+        self.assertIn("references/BOOTSTRAP.md", missing)
+
+    def test_bad_version_format_detected(self):
+        import shutil
+        broken = Path(tempfile.mkdtemp(prefix="tsc-up-"))
+        self.addCleanup(shutil.rmtree, broken, True)
+        shutil.copytree(SKILL, broken / "tsc", ignore=shutil.ignore_patterns("__pycache__"))
+        (broken / "tsc" / "VERSION").write_text("not-a-version\n", encoding="utf-8")
+        missing = tsc.validate_upstream(broken / "tsc")
+        self.assertTrue(any("版本格式非法" in m for m in missing), missing)
+
+    def test_template_without_marker_detected(self):
+        import shutil
+        broken = Path(tempfile.mkdtemp(prefix="tsc-up-"))
+        self.addCleanup(shutil.rmtree, broken, True)
+        shutil.copytree(SKILL, broken / "tsc", ignore=shutil.ignore_patterns("__pycache__"))
+        tpl = broken / "tsc" / "templates" / "AGENTS.md"
+        tpl.write_text(tsc.read_text(tpl).replace(tsc.CONTRACT_MARKER_LINE, ""), encoding="utf-8")
+        missing = tsc.validate_upstream(broken / "tsc")
+        self.assertTrue(any("所有权标记" in m for m in missing), missing)
+
+
+class RollbackManifestValidationTests(unittest.TestCase):
+    """rollback 在第一次写入之前完整校验 manifest：非法路径立即失败、零恢复。"""
+
+    def setUp(self):
+        import shutil
+        self.tmp = Path(tempfile.mkdtemp(prefix="tsc-rbv-"))
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.backup = self.tmp / ".agents" / ".tsc-backup"
+        self.backup.mkdir(parents=True)
+        (self.tmp / "AGENTS.md").write_text("current\n", encoding="utf-8")
+
+    def write_manifest(self, files, moves=None):
+        manifest = {"schema": 2, "contract_version": "5.2.0", "files": files,
+                    "moves": moves or []}
+        (self.backup / "manifest.json").write_text(
+            json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
+
+    def assert_refused(self):
+        rc = tsc.cmd_rollback(self.tmp)
+        self.assertEqual(rc, tsc.EXIT_IO)
+        # 关键不变量：拒绝恢复时项目文件一个都不动
+        self.assertEqual((self.tmp / "AGENTS.md").read_text(encoding="utf-8"), "current\n")
+
+    def test_traversal_path_refused(self):
+        self.write_manifest([{"path": "../escape.txt", "action": "create"}])
+        self.assert_refused()
+
+    def test_absolute_path_refused(self):
+        self.write_manifest([{"path": "C:/Windows/evil.txt", "action": "create"}])
+        self.assert_refused()
+
+    def test_nested_dotdot_refused(self):
+        self.write_manifest([{"path": "a/../../evil.txt", "action": "modify", "content": "x"}])
+        self.assert_refused()
+
+    def test_move_traversal_refused(self):
+        self.write_manifest([], moves=[{"from": "../steal", "to": ".agents/steal"}])
+        self.assert_refused()
+
+    def test_bad_action_refused(self):
+        self.write_manifest([{"path": "AGENTS.md", "action": "delete"}])
+        self.assert_refused()
+
+    def test_missing_content_refused(self):
+        self.write_manifest([{"path": "AGENTS.md", "action": "modify"}])
+        self.assert_refused()
+
+    def test_symlink_target_refused(self):
+        import shutil as _shutil
+        outside = Path(tempfile.mkdtemp(prefix="tsc-out2-"))
+        self.addCleanup(_shutil.rmtree, outside, True)
+        sub = self.tmp / "redirect"  # 链接挂载点：必须事先不存在
+        made = False
+        try:
+            os.symlink(str(outside), str(sub), target_is_directory=True)
+            made = True
+        except (OSError, NotImplementedError, AttributeError):
+            try:
+                import _winapi
+                _winapi.CreateJunction(str(outside), str(sub))
+                made = True
+            except (OSError, ImportError):
+                pass
+        if not made:
+            self.skipTest("本机既不能建 symlink 也不能建 junction，跳过")
+        self.write_manifest([{"path": "redirect/evil.txt", "action": "create"}])
+        self.assert_refused()
+        self.assertFalse((outside / "evil.txt").exists())
+
+    def test_valid_manifest_with_move_restores(self):
+        # 迁移记录能搬回：.agents/test → test
+        (self.tmp / ".agents" / "test").mkdir(parents=True)
+        (self.tmp / ".agents" / "test" / "EVAL-SET.md").write_text("x", encoding="utf-8")
+        self.write_manifest([], moves=[{"from": "test", "to": ".agents/test"}])
+        rc = tsc.cmd_rollback(self.tmp)
+        self.assertEqual(rc, tsc.EXIT_OK)
+        self.assertTrue((self.tmp / "test" / "EVAL-SET.md").is_file())
+        self.assertFalse((self.tmp / ".agents" / "test").exists())
+
+
+class TransactionUnitTests(unittest.TestCase):
+    """事务单元行为：backup 失败先于任何项目写盘；写入失败自动恢复。"""
+
+    def setUp(self):
+        import shutil
+        self.tmp = Path(tempfile.mkdtemp(prefix="tsc-txn-"))
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+
+    def test_execute_transaction_backup_failure_leaves_project_untouched(self):
+        # 备份目录被一个同名文件占用 → mkdir 失败 → 事务在任何项目写盘前终止
+        (self.tmp / ".agents").mkdir()
+        (self.tmp / ".agents" / ".tsc-backup").write_text("not a dir", encoding="utf-8")
+        plan = {"writes": [("AGENTS.md", "hello\n", None)], "moves": []}
+        code, problems, exc = tsc._execute_transaction(self.tmp, plan, "5.2.0")
+        self.assertEqual(code, tsc.EXIT_IO)
+        self.assertIsNotNone(exc)
+        self.assertFalse((self.tmp / "AGENTS.md").exists(), "backup 失败不得写任何项目文件")
+        self.assertFalse((self.tmp / ".agents" / ".tsc-backup" / "manifest.json").exists())
+
+    def test_execute_transaction_write_failure_rolls_back(self):
+        from unittest import mock
+        plan = {
+            "writes": [
+                ("AGENTS.md", "new\n", "old\n"),
+                (".github/workflows/gate.yml", "gate\n", None),
+            ],
+            "moves": [],
+        }
+        (self.tmp / "AGENTS.md").write_text("old\n", encoding="utf-8")
+        calls = {"n": 0}
+        real_write = tsc.write_text_atomic
+
+        def flaky(path, text, dry_run=False):
+            calls["n"] += 1
+            if calls["n"] >= 2:  # 第二个写入（gate.yml）失败
+                raise OSError("disk full")
+            return real_write(path, text, dry_run)
+
+        with mock.patch.object(tsc, "write_text_atomic", side_effect=flaky):
+            code, problems, exc = tsc._execute_transaction(self.tmp, plan, "5.2.0")
+        self.assertEqual(code, tsc.EXIT_IO)
+        self.assertEqual((self.tmp / "AGENTS.md").read_text(encoding="utf-8"), "old\n")
+        self.assertFalse((self.tmp / ".github").exists(), "新建目录必须一并回滚")
+        backup_dir = self.tmp / ".agents" / ".tsc-backup"
+        self.assertFalse((backup_dir / "manifest.json").exists(), "失败事务不得提交清单")
+        self.assertFalse((backup_dir / "manifest.json.new").exists(), "失败事务不得留半成品")
+
+    def test_migration_only_sync_gets_manifest(self):
+        """migration-only 事务也必须有 committed 清单（moves 记录在案）。"""
+        plan = {"writes": [], "moves": [("AUDIT-SPEC.md", ".agents/AUDIT-SPEC.md")]}
+        (self.tmp / "AUDIT-SPEC.md").write_text("spec\n", encoding="utf-8")
+        code, problems, exc = tsc._execute_transaction(self.tmp, plan, "5.2.0")
+        self.assertEqual(code, tsc.EXIT_OK)
+        manifest = json.loads(tsc.read_text(
+            self.tmp / ".agents" / ".tsc-backup" / "manifest.json"))
+        self.assertEqual(manifest["moves"],
+                         [{"from": "AUDIT-SPEC.md", "to": ".agents/AUDIT-SPEC.md"}])
+        self.assertTrue((self.tmp / ".agents" / "AUDIT-SPEC.md").is_file())
+        self.assertFalse((self.tmp / "AUDIT-SPEC.md").exists())
+
+
+class RollbackSafetyAuditTests(unittest.TestCase):
+    """A-02：回滚未彻底时备份清单必须保留，成功语不得照发。"""
+
+    def setUp(self):
+        import shutil
+        self.tmp = Path(tempfile.mkdtemp(prefix="tsc-a02-"))
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.backup = self.tmp / ".agents" / ".tsc-backup"
+        self.backup.mkdir(parents=True)
+
+    def _manifest(self, files):
+        (self.backup / "manifest.json").write_text(json.dumps(
+            {"schema": 2, "contract_version": "5.2.0", "files": files, "moves": []},
+            ensure_ascii=False), encoding="utf-8")
+
+    def test_blocked_restore_keeps_manifest_for_retry(self):
+        # 目标被目录占位 → 还原失败：清单保留、可重试，绝不毁掉唯一的回滚凭据
+        self._manifest([{"path": "AGENTS.md", "action": "modify", "content": "old\n"}])
+        (self.tmp / "AGENTS.md").mkdir()
+        rc = tsc.cmd_rollback(self.tmp)
+        self.assertEqual(rc, tsc.EXIT_IO)
+        self.assertTrue((self.backup / "manifest.json").is_file(), "清单必须保留供重试")
+        rc2 = tsc.cmd_rollback(self.tmp)  # 修复后二次 rollback 仍可用（清单还在）
+        self.assertEqual(rc2, tsc.EXIT_IO)
+
+    def test_dry_run_rejected_for_rollback_and_update(self):
+        """A-03：rollback/update 的 --dry-run 显式拒绝（rc=3），不得静默真执行。"""
+        (self.backup / "manifest.json").write_text(json.dumps(
+            {"schema": 2, "contract_version": "5.2.0", "files": [], "moves": []}), encoding="utf-8")
+        marker = self.tmp / "AGENTS.md"
+        marker.write_text("intact\n", encoding="utf-8")
+        rc = tsc.main(["rollback", "--dry-run", "--project", str(self.tmp)])
+        self.assertEqual(rc, tsc.EXIT_STATE)
+        self.assertEqual(marker.read_text(encoding="utf-8"), "intact\n", "拒绝时也不得动文件")
+        self.assertTrue((self.backup / "manifest.json").is_file())
+        rc = tsc.main(["update", "--dry-run"])
+        self.assertEqual(rc, tsc.EXIT_STATE)
+
+
+class NodeLegacyUpgradeAuditTests(unittest.TestCase):
+    """A-06：Node 项目旧部署的无标记 pre-commit 必须能走一次性升级。"""
+
+    def setUp(self):
+        import shutil
+        self.tmp = Path(tempfile.mkdtemp(prefix="tsc-a06-"))
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+
+    def test_node_legacy_precommit_upgrades_not_skipped(self):
+        (self.tmp / "package.json").write_text("{}", encoding="utf-8")
+        template = tsc.read_text(SKILL / "templates/enforcement/.pre-commit-config.yaml")
+        # 旧版部署形态：正文与模板一致、只缺标记行（Node 项目保留 node 区块）
+        lines = [ln for ln in template.splitlines()
+                 if not tsc.is_marker_line(ln, tsc.MANAGED_MARKER)]
+        tsc.write_text_atomic(self.tmp / ".pre-commit-config.yaml", "\n".join(lines) + "\n")
+        deploy, update, skip = tsc._enforce_actions(self.tmp, SKILL, AGENTS_SAMPLE)
+        self.assertIn(".pre-commit-config.yaml", [n for n, _ in update],
+                      "Node 旧部署文件必须能一次性升级为托管版，而不是被误判'项目已接管'")
+        self.assertEqual([n for n, _ in skip], [])
+
+
+class StatusLegacyWordingAuditTests(unittest.TestCase):
+    """A-10：status 对'能自动迁移'与'目标被占位'必须区分措辞。"""
+
+    def setUp(self):
+        import shutil
+        import io
+        from contextlib import redirect_stdout
+        self.tmp = Path(tempfile.mkdtemp(prefix="tsc-a10-"))
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        (self.tmp / "AGENTS.md").write_text(AGENTS_SAMPLE, encoding="utf-8")
+
+    def _status_output(self):
+        import io
+        from contextlib import redirect_stdout
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            tsc.cmd_status(self.tmp, None, as_json=False)
+        return buf.getvalue()
+
+    def _make_legacy_test_dir(self):
+        (self.tmp / "test").mkdir()
+        (self.tmp / "test" / "EVAL-SET.md").write_text("x\n", encoding="utf-8")
+        (self.tmp / "test" / "TEST-MANUAL.md").write_text("x\n", encoding="utf-8")
+
+    def test_migratable_legacy_promises_auto_move(self):
+        self._make_legacy_test_dir()
+        out = self._status_output()
+        self.assertIn("会自动搬进", out)
+
+    def test_blocked_legacy_warns_instead_of_promising(self):
+        self._make_legacy_test_dir()
+        (self.tmp / ".agents").mkdir()
+        (self.tmp / ".agents" / "test").mkdir()  # 目标被占位 → 搬不动
+        out = self._status_output()
+        self.assertIn("无法自动迁移", out)
+        self.assertNotIn("会自动搬进", out)
+
+
+class PlaceholderConsistencyAuditTests(unittest.TestCase):
+    """A-04②：§2 占位时 check-config 与 CI 同口径（从严 rc=1）。"""
+
+    def setUp(self):
+        import shutil
+        self.tmp = Path(tempfile.mkdtemp(prefix="tsc-a04-"))
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        (self.tmp / "AGENTS.md").write_text(AGENTS_SAMPLE.replace(
+            "| 测试 (Test) | pytest |", "| 测试 (Test) | %s |" % tsc.PLACEHOLDER), encoding="utf-8")
+        (self.tmp / ".agents").mkdir()
+        (self.tmp / ".agents" / "project.py").write_text(
+            "FMT_CHECK_CMD = None\nLINT_CMD = None\nTEST_CMD = None\nBUILD_CMD = None\n",
+            encoding="utf-8")
+
+    def test_placeholder_fails_check_config_with_actionable_message(self):
+        import io
+        from contextlib import redirect_stdout
+        buf_err = io.StringIO()
+        import contextlib
+        with contextlib.redirect_stderr(buf_err), redirect_stdout(io.StringIO()):
+            rc = tsc.cmd_check_config(self.tmp)
+        self.assertEqual(rc, tsc.EXIT_MERGE)
+        self.assertIn("[自动填充]", buf_err.getvalue())
+
+
+class VerifyConfigTypeAuditTests(unittest.TestCase):
+    """最终审查 F-01：AST 白名单合法接受的 list/int 值不得让 verify 裸崩
+    （TypeError traceback），必须干净退出 rc=3 并指明修正位置。"""
+
+    def setUp(self):
+        import shutil
+        self.tmp = Path(tempfile.mkdtemp(prefix="tsc-f01-"))
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        (self.tmp / ".agents").mkdir()
+
+    def _verify(self, cfg_text):
+        (self.tmp / ".agents" / "project.py").write_text(cfg_text, encoding="utf-8")
+        import io
+        from contextlib import redirect_stdout, redirect_stderr
+        with redirect_stdout(io.StringIO()) as out, redirect_stderr(io.StringIO()) as err:
+            rc = tsc.main(["verify", "--project", str(self.tmp)])
+        return rc, out.getvalue() + err.getvalue()
+
+    def test_list_command_fails_clean(self):
+        rc, out = self._verify('TEST_CMD = ["echo", "hi"]\n')
+        self.assertEqual(rc, tsc.EXIT_STATE)
+        self.assertIn("必须是字符串", out)
+        self.assertNotIn("Traceback", out)
+
+    def test_bad_timeout_fails_clean(self):
+        rc, out = self._verify('TEST_CMD = "echo ok"\nGATE_TIMEOUTS = {"TEST_CMD": "abc"}\n')
+        self.assertEqual(rc, tsc.EXIT_STATE)
+        self.assertIn("无法解释为秒数", out)
+        self.assertNotIn("Traceback", out)
+
+    def test_numeric_timeout_still_works(self):
+        # 合法形态（数字字符串/整数）不受影响
+        rc, out = self._verify(
+            'TEST_CMD = "echo ok"\nGATE_TIMEOUTS = {"TEST_CMD": 300}\n')
+        self.assertEqual(rc, tsc.EXIT_OK, out)
 
 
 if __name__ == "__main__":
