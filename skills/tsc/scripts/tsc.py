@@ -1890,8 +1890,12 @@ def cmd_doctor(proj_root, upstream, as_json=False):
         else:
             add("上游来源", "ok", "%s（v%s）" % (upstream, up_ver))
     host_repo = git_worktree_of(upstream_root())
-    if host_repo is not None:
+    # 与 cmd_update 同口径（A-09 收尾）：所在仓库必须真的收录了本技能，
+    # 否则 update 会拒绝 pull——doctor 不得提前把它说成"可直接 pull"
+    if host_repo is not None and _repo_tracks_skill(host_repo, upstream_root()):
         add("本体更新通道", "ok", "git 安装（%s；tsc update 可直接 pull）" % host_repo)
+    elif host_repo is not None:
+        add("本体更新通道", "warn", "技能目录在 git 仓库 %s 内但未被其收录：本体更新走宿主插件/技能管理（tsc update 不适用）" % host_repo)
     else:
         add("本体更新通道", "warn", "非 git 安装：本体更新走宿主插件/技能管理（tsc update 不适用）")
 

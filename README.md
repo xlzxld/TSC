@@ -16,7 +16,7 @@ TSC/
 │  ├─ references/               # AUDIT-SPEC.md（体检）/ BOOTSTRAP.md（项目探测填充）
 │  └─ commands/                 # 可选的斜杠命令（宿主支持命令文件时才生效）
 ├─ AGENTS.md                    # 本仓库自己的契约实例（母版在 skills/tsc/templates/AGENTS.md）
-├─ tests/unit  tests/e2e        # 快速单测（208 例，<5s）/ 端到端回归（53 例，<20s；全量 discovery 261 例，约 20s）
+├─ tests/unit  tests/e2e        # 快速单测（210 例，<5s）/ 端到端回归（53 例，<20s；全量 discovery 263 例，约 20s）
 ├─ CHANGELOG.md
 └─ .agents/                     # 本仓库自己的契约落盘件（project.py / VERSION / .source）
 ```
@@ -113,7 +113,7 @@ python3 "$SK/scripts/tsc.py" rollback    --project <项目根>   # 撤销最近�
 ## 已知缺口（诚实登记）
 
 - 母版自带的多平台 CI（`ci.yml`）只覆盖**测试与门禁**；母版本身仍不部署自己的执法包（`gate.yml`）——那是刻意设计，避免出现第二份真身。两者文件名不同、互不干扰。
-- `tsc.py` 单文件约 1900 行，聚合了 CLI、所有权判定、事务执行、配置比对、原子写、进程管理。当前取舍是"零依赖单文件最好分发"。
+- `tsc.py` 单文件约 2100 行，聚合了 CLI、所有权判定、事务执行、配置比对、原子写、进程管理。当前取舍是"零依赖单文件最好分发"。
 - Windows 超时终止依赖外部 `taskkill.exe`（不可用时退回单进程终止，超时结论不受影响）。理论上可换 Windows 原生 Job Object 做到零残留，属优化而非缺陷。
 - 插值内"引号没配对"这类**语法**错误由 L2（`node --check` / `ast`）负责，L1 刻意不报——报它会把合法 JSX 文案里的撇号误伤。`node` 缺席时该层降级（`--strict --allow-missing-tools` 下放行，其余严格模式拦下）。
 - `gofmt` 等外部检查器的判定以退出码为准（stderr 仅诊断）；个别工具"退出码 0 但 stderr 报错"的极端形态不在拦截范围内。
