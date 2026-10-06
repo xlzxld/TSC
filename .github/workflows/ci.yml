@@ -25,7 +25,7 @@ jobs:
         with:
           python-version: "3.12"
 
-      # 两个检查器各自的用例表（结构门禁 35 例 / 括号引擎 30 例）
+      # 两个检查器各自的用例表（结构门禁 42 例 / 括号引擎 32 例）
       - name: 结构门禁自检
         run: |
           python skills/tsc/scripts/structure_guard.py --selftest

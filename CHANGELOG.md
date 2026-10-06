@@ -1,5 +1,44 @@
 # 变更记录 (CHANGELOG)
 
+## v5.2.0（2026-09-29）
+
+### 收官外部体检修复（A-01~A-11，逐条复现核实后修复；ID 沿用体检报告）
+
+| ID | 级别 | 修复 | 实测取证 |
+|---|---|---|---|
+| A-01 | P0 | **L4 断言层改显式授权**：`structure_guard` 不再自动加载/执行项目根的 `guard_asserts.py`（旧版任何 PR 新增该文件，就能在开发者 `git commit` 时经 pre-commit 在其本机执行任意代码）；改为 `--asserts <路径>` 显式指定才加载，`--project` 参数随之移除（其唯一用途就是自动加载） | 单测：仓库根放带写盘副作用的 `guard_asserts.py`，默认扫描 rc=0 且标记文件不存在；显式 `--asserts` 正常加载并按 rc=1 拦截；路径不存在 rc=2 |
+| A-02 | P1 | **回滚未彻底时保留备份清单**：旧版无论还原是否受阻都无条件 `rmtree` 清单并照发成功语，受阻后连重试机会都没有；现在仅全部成功才删清单，受阻时 rc=2、清单保留、列出已恢复项 | 单测 + e2e：modify 目标被目录占位 → rc=2、`manifest.json` 仍在、输出含"回滚未彻底/已保留"，二次 rollback 仍可执行 |
+| A-03 | P1 | **rollback/update 显式拒绝 `--dry-run`**：旧版静默忽略该 flag（rollback 会真删文件、update 会真 pull）；现 rc=3 并提示用 status/doctor 预览 | 单测 + e2e：`rollback --dry-run` rc=3、文件与清单原样；`update --dry-run` rc=3 |
+| A-04① | P1 | **PowerShell 转义符方向修正**：`bracket_lint` 的 ps1 profile 按反斜杠转义（PowerShell 实际是反引号）——合法的 `` "before `" after" `` 被误报未闭合、非法的 `\"` 被放行；改为 profile 级 `esc` 转义符（ps1=`` ` ``，其余默认 `\`） | 复现：修复前合法反引号转义 rc=1；修复后自检新增 2 例全过（**42/42**） |
+| A-04② | P1 | **§2 占位时 CI 与本地同源校验口径统一（从严）**：旧版 CI 内联壳对 `[自动填充]` 跳过校验给 rc=0（本地 check-config 是 rc=1），两套壳结论相反；现两侧统一 rc=1 + "未适配"提示——check-config 绿必须意味着真同源（"未配置不是通过"） | e2e：内联壳与本地三态一致（占位 1 / 不一致 1 / 全绿 0）；cp1252 控制台用例同步更新 |
+| A-05 | P1 | **影子测试类修复**：`InterpreterRetargetTests` 同名类定义两次，后者覆盖前者，此前 5 条解释器回退回归从未运行；后一类改名 `InterpreterHeadRegexTests` | `loadTestsFromName` 修复前只加载 1 例；修复后 5 条回退测试真实运行（unit 例数随之增加） |
+| A-06 | P2 | **旧执法包一次性升级的对称比较**：旧版只剥模板侧的 Node 区块、不剥项目侧 → Node 项目的无标记旧部署文件永远判"项目已接管"，升级路径失效；两侧统一剥 | 单测：Node 项目 + 正文与模板一致的无标记 pre-commit → `update` 包含该文件、skip 为空 |
+| A-07 | P2 | **版本漂移收口**：`AUDIT-SPEC.md`/`BOOTSTRAP.md` 头注升 v5.2.0；`test_version_single_source` 改为动态读 VERSION 真源（不再硬编码），并新增"模板/根 AGENTS.md 版本头注 == VERSION"断言（CI 里恒真值断言随之消灭）；README 发版清单补"版本头注同步 + git grep 残留检查"一步 | `git grep 5.1.0`（除 CHANGELOG 历史记录）零命中；动态断言在 CI 与本机均为活断言 |
+| A-08 | P2 | **文案与实现不符四连修**：①"下一步：编辑 project.py"死分支改为事务前采样判定（dry-run 也提示）；②`cmd_update` 失败不再透传 git 原始码（如 128），归一 `EXIT_MERGE`（1）；③BOOTSTRAP 的备份位置改述为 `.agents/.tsc-backup/manifest.json`；④CHANGELOG C-07 标注 `journal_write` 已被 D-01 统一事务取代 | ①dry-run 输出含"下一步"；②退出码契约恢复 0/1/2/3/124；③④文档与代码一致 |
+| A-09 | P2 | **update 前校验仓库归属**：`git_worktree_of` 只往上找第一个含 `.git` 的祖先，技能被装进宿主项目内（如 `.claude/skills/tsc`）时会 pull **宿主项目自己的仓库**还谎报"本体已是最新"；现先 `git ls-files --error-unmatch <技能>/VERSION` 确认收录，未收录走非 git 分支 rc=3 | e2e：临时 git 仓库内嵌未跟踪技能副本 → update rc=3、输出"绝不 pull 宿主项目/收录"；真实母版仓库（已跟踪）不受影响 |
+| A-10 | P2 | **无漂移早退不再吞迁移受阻**：早退分支补"目标位置已有同名项，无法自动迁移"告警；`status` 对可迁移（"会自动搬进"）与受阻（"无法自动迁移"）区分措辞 | 单测 + e2e：`.agents/AUDIT-SPEC.md` 占位冲突时 sync 早退输出受阻告警、status 不再承诺自动搬 |
+| F-01 | P1 | **verify 对非法配置类型不再裸崩**：AST 白名单合法接受的 list/int 等常量值流入 `cmd_verify` 会在解释器回退的正则匹配处抛未捕获 TypeError（`GATE_TIMEOUTS` 非数字值同理 ValueError），traceback 退出码 1 破坏 0/1/2/3/124 契约且伪装成"需人工合并"；本地与 CI 内联壳同口径加防线：非字符串命令 / 超时值不可解释为秒数 → 干净 rc=3 + 指明修正位置 |
+  | 单测 3 例（list 命令 / 非法超时 / 合法数字超时不误伤）+ e2e 1 例（内联壳同判定 rc=3、无 Traceback） |
+| A-11 | P2 | **部署生成物 ignore 提示**：install/sync 写入 `.agents/VERSION`/`.agents/.source` 时提示按需加入 `.gitignore`（旧版对接入项目零处理，常驻 2 个未跟踪文件；`.source` 还含本机路径） | e2e：install 输出含"部署生成物/.gitignore"提示 |
+
+### 收官轮：错误通过 / 错误覆盖 / 错误回滚 / 越界写入与安全缺陷一次性消除
+
+| ID | 修复 | 实测取证 |
+|---|---|---|
+| D-01 | **install/sync 重做为单事务**：备份、legacy migration、写入、移动统一进 `_execute_transaction`——先算完整 mutation plan；备份清单在改动任何项目文件**之前**落盘为临时文件；写入 / 迁移任一步失败自动恢复原状（含新建目录逐层清理）；全部成功后 `os.replace` 提交清单（committed 语义）；失败事务不留半成品 backup / journal；migration-only sync 也有对应回滚记录（迁移进同一清单）；rollback 只恢复最近一次成功事务 | e2e：backup 失败（`.tsc-backup` 被文件占用）写盘前终止 rc=2；`.github` 被文件占用 → 中途失败全量回滚（AGENTS.md/.agents 均不残留）；migration-only sync 后 rollback 把 `test/` 搬回原位；连续 tamper→sync→tamper→sync→rollback 只恢复最近一次状态、再 rollback rc=3 |
+| D-02 | **路径逃逸封死**：新增 `safe_project_path` 作为所有项目写入与回滚路径的唯一入口——拒绝绝对路径（含盘符）、任何 `..` 段、resolve 后越出项目根；从根到目标的任何组件是 symlink **或 junction**（realpath 对比，Windows 无特权环境也可测）一律拒绝；`rollback` 在第一次写入前完整校验整个 manifest（files + moves），发现任何非法路径整体拒绝 rc=2，绝不恢复一半 | 单测：`../escape`、绝对路径、嵌套 `..`、`.agents ->` 外部目录（junction 实测拦截，项目外零写入）、受管理文件 symlink、move 表 traversal、非法 action / 缺 content 全部拒绝且项目文件一字不动 |
+| D-03 | **禁止 exec(project.py)**：`doctor` / `check-config` / `verify` 改为 `parse_project_config` AST 安全解析——白名单只有 `FMT/LINT/TEST/BUILD_CMD`（None / 字符串）与 `GATE_TIMEOUTS`（字符串键常量字典）；import、函数调用、属性访问、变量引用、任意其它语句一律拒绝（rc=3）；gate.yml 的 CI 内联壳同步换 AST 解析（同源） | e2e：project.py 夹带 `os.system("echo pwned > ...")` 时 verify / check-config / doctor 全部 rc=3 且标记文件不存在；`__import__("os").getenv(...)` 赋值被"禁止函数调用"拦截；良性配置（含 `__all__`、docstring、GATE_TIMEOUTS）正常解析 |
+| D-04 | **structure_guard 防 false-green**：新增 `--strict`（截断 / 超大文件降级 / 未知语言 / 工具缺失 → 退出码 2，"没查完 ≠ 通过"）与 `--allow-missing-tools`（显式放行工具缺席类降级）；CI / pre-commit / AGENTS §2 的门禁命令统一带 strict；本地人工模式保留告警但汇总明示"检查不完整"；`--staged` 超上限不再静默、hook 超 MAX_HOOK_FILES 显性告警（fail-open 契约不变）；**子进程判定改为以退出码为准**（合法命令往 stderr 打 warning 不再误判失败，stderr 仅作诊断）；`guard:skip` 只在真实注释上下文生效（复用语言 profile 做单行词法，字符串字面量里的标记不再豁免） | 单测：1001 文件含截断范围外的坏文件——非 strict rc=0 + stderr 警告、strict rc=2；>2MB 语法错误文件 strict rc=2（括号坏仍 rc=1）；mock rc=0+stderr 警告通过、rc=2 报错拦截；字符串里 `guard:skip` 不豁免（自检新增 2 例）；hook 25 文件告警放行、坏文件仍拦 rc=2；顺带修掉 `_extract_hook_paths` 丢弃列表形式路径的缺陷。自检 40/40 |
+| D-05 | **upstream 完整校验**：建立唯一 `REQUIRED_UPSTREAM` 清单（SKILL.md / VERSION / scripts 四件 / templates / enforcement 四件 / references 两件 / commands 四件）；缺任一项、VERSION 格式非法（非 x.y.z）、模板缺 §2 或所有权标记 → install/sync/status/doctor 入口即拒（rc=3），零项目写盘 | 单测：删 `references/BOOTSTRAP.md` 被检出；VERSION=`not-a-version` 检出；模板删标记检出。e2e：残缺上游 install/sync 均 rc=3、AGENTS.md/.agents 均不存在 |
+| D-06 | **ownership / legacy 双特征收紧**：legacy 自动识别需要 ≥2 个独立 TSC 历史特征——合法历史版本号（`.agents/VERSION` x.y.z）+ 部署痕迹（`.agents/.source`、根目录旧契约文件、带 tsc-managed 标记的落盘检查器，任一）。凑不齐一律按 foreign 处理；§2 表格形状**不算**证据。v3.x 裸 sync 自动升级能力保留 | 单测：仅 VERSION → foreign；VERSION + .source → legacy；VERSION + 根 AUDIT-SPEC.md → legacy。e2e：外部 AGENTS.md + `.agents/VERSION` → sync rc=1 不接管且零写入；再加 `.source` → 正常 legacy 升级 |
+| D-07 | **CI 分支名 YAML-safe 渲染**：`render_branches_entry` 对简单分支名保持 `[main]`，含逗号/`]`/`#`/`{}`/空格/引号的合法分支名渲染为单引号流序列（`'` 转义为 `''`），不再裸插值生成坏 YAML；`debranch` 对称可逆（幂等 sync 不漂移） | 单测：7 种特殊分支名精确断言渲染结果与 debranch 往返。e2e：5 种特殊分支名 install→sync 落盘 `branches: ['release/1,2']` 等、二次 sync "已是最新" |
+| D-08 | **测试链顺序 / 隔离加固**：e2e 全部子进程加 180s 硬超时（卡死变失败、不再挂住 discovery）；"母版仓库"场景（自举 sync / doctor）改用整仓临时副本 + 副本自己的 tsc.py，不再写真实仓库（消除唯一的跨测试共享状态）；CI 内联壳夹具随 AST 改造同步更新；`GitWorktreeTests` 改为临时布局断言，不再依赖本机仓库恰好带 `.git` | 完整 discovery（238 例）连续 3 次结果一致（约 18s/次）；unit 191 例 / e2e 47 例单独亦全绿；**干净副本（无 .git、无本地 .agents）上 `tsc.py verify` 退出码 0**——该项验收实际抓出并修掉了最后一个环境依赖 |
+| D-09 | **通用契约修订**（`templates/AGENTS.md`）：删除"契约高于会话指令"；R-0.2 改为"不得臆造项目事实，优先从代码/配置/测试/工具/文档获取，关键歧义才问"；R-1.3 改为"行为性缺陷优先回归测试，不适合时提供针对性验证"；R-3.3 只禁无意义调试残留（合法 CLI/test 输出除外）；R-3.8 遵循项目已有提交规范；R-3.9 删除"重复三次"硬数字改禁过度抽象；明确 verify 是执行型门禁；明确 AGENTS.md 是"宿主支持时的项目级入口"；"已知豁免清单"如实定义为人工维护基线（不再声称机器比对） | `test_root_agents_is_compose_of_template` 零漂移通过；行数预算 74 行 < 80、规则数 ≤30 断言通过；check-config 同源一致 |
+| D-10 | **commitlint 降为可选适配层 + 包管理器尊重**：仅 Node 项目且项目没有 `.commitlintrc*` 等自有提交规范配置时部署；`commitlint.config.js` 的归属（托管 / legacy 升级 / 项目已接管）由执法包三态规则统一管辖，接管文件显式跳过不静默；检测到 pnpm/yarn/bun 锁文件时 doctor 与 install 输出提示按项目包管理器调整；核心 TSC 不依赖 Node（不变） | 单测：`.commitlintrc.json` 存在 → 不部署；接管过的 commitlint.config.js → skip"内容已被项目改过"。e2e：纯 Python 项目 8 文件零 npm；普通 Node 项目照常部署 |
+| D-11 | **文档与实现完全对齐**：README（事务 / 双特征 / 路径安全 / AST / strict / 测试规模 191+47=238 例与实测耗时）、enforcement/README（v5.2.0、strict 说明、事务与回滚、commitlint 可选层）、SKILL.md（verify 执行型语义）、本 CHANGELOG；版本全仓统一 v5.2.0，消除 v5.0/v5.1 漂移 | `test_version_single_source`、compose 零漂移、frontmatter 断言全绿 |
+
+**验收（含体检修复轮与最终审查 F-01 的最终状态）**：unit 208 例全绿；e2e 53 例全绿；完整 discovery 连续多次一致（261 例，约 20s/次）；`structure_guard --selftest` 42/42；`bracket_lint --selftest` 32/32；`check-config` 退出码 0；`doctor` 退出码 0（ready，10/0/0）；干净仓库 `tsc.py verify` 退出码 0。
+
 ## v5.1.0（2026-09-29）
 
 ### 彻底到位与多平台/运行时增强（一次性全方位夯实）
@@ -12,7 +51,7 @@
 | C-04 | **Git Hook 安装器优先级与 pre-commit 框架冲突感知**：`install_hook.py` 将解释器检测优先级调整为 `python3` 优先于 `python`（与 `tsc.py` 一致）；检测到仓库使用 pre-commit framework 生成的 hook 时给出清晰友好指引 | 修复前在 Linux/macOS 默认环境下可能调起旧版 `python` 解释器；修复后解释器调度统一，且能识别 pre-commit hook 冲突并返回码 2 提示用户 |
 | C-05 | **主干分支名注入清洗**：`tsc.py` 的 `enforce_template_content` 与 `debranch` 在解析 §2 的 `主干分支` 时严格剥离反引号（`` ` ``）与首尾空白字符 | 修复前若用户在 §2 中书写 `` `main` ``，部署生成的 `gate.yml` 会产生非法 YAML 语法 `branches: [`main`]`；修复后统一清洗为标准字面量 `branches: [main]` |
 | C-06 | **Windows 路径大小写归一化（自举判据）**：`is_self_bootstrap` 引入 `os.path.normcase` 归一化盘符与路径 | 修复前 Windows 系统不同盘符大小写或大小写不敏感路径在自举判断时可能产生假阴性，导致母版仓库被误认作普通接入项目；修复后 100% 稳定匹配 |
-| C-07 | **`project.py` 部署采用原子日志事务写入**：`tsc.py` 的 `do_apply` 将 `project.py` 写入改为调用 `journal_write` | 确保 `project.py` 在写入时具备 UTF-8 + LF 格式化保障、临时文件原子替换，并被纳入 rollback 事务清单可随时精准撤销 |
+| C-07 | **`project.py` 部署采用原子日志事务写入**：`tsc.py` 的 `do_apply` 将 `project.py` 写入改为调用 `journal_write`（v5.2.0 注：该机制已被 D-01 的统一事务 `_execute_transaction` 取代，`journal_write` 不再存在，此为历史记录） | 确保 `project.py` 在写入时具备 UTF-8 + LF 格式化保障、临时文件原子替换，并被纳入 rollback 事务清单可随时精准撤销 |
 | C-08 | **解释器回退正则兼容 `.exe` 与大小写**：`_INTERPRETER_HEAD` 增加 `(?:\.exe)?` 与 `re.IGNORECASE` 标识，并在 `gate.yml` CI 聚合壳中同步对齐 | 修复前带 `.exe`（如 `python.exe` / `py.exe`）或大写开头的命令无法被正则识别回退；修复后本地与 CI 双端同口径完美解析并回退 |
 | C-09 | **§2 表格表头支持英文国际化关键字**：`ROW_TO_KEY` 补充 `Format`、`Lint`、`Test`、`Build` 支持，并在 `gate.yml` 中同步对齐 | 修复前英文开源项目在 §2 中书写 `Format` / `Lint` / `Test` / `Build` 表头时在 `check-config` 中报不一致；修复后中英文表头双向兼容 |
 | C-10 | **`tsc update` 定位上游真实 Git 工作树**：`cmd_update` 从仅在技能目录找 `.git` 改为通过 `git_worktree_of(upstream_root())` 定位并拉取 `host_repo` | 修复前母版仓库或子目录安装形态下执行 `tsc update` 因子目录无 `.git` 直接报错拒绝；修复后正确对上游 Git 根执行 `git pull --ff-only` |

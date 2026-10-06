@@ -1,6 +1,6 @@
 # 执法包 (Enforcement)
 
-> **版本 v5.0.0** | 对应 `AGENTS.md` v5.0.0 的机械执法层：**文档管行为，钩子兜底线**。
+> **版本 v5.2.0** | 对应 `AGENTS.md` v5.2.0 的机械执法层：**文档管行为，钩子兜底线**。
 > **默认启用**：`tsc.py install` 会自动把本目录的模板落到下表位置，不需要手工拷贝。
 > 红线中可机器判定且已落地的项（密钥、提交格式、门禁、主干保护）在此落地；其余红线（如 R-3.1 吞异常、R-3.3 调试残留）由提示词纪律与人工审查兜底。
 
@@ -8,13 +8,23 @@
 
 | 模板（技能目录内） | 自动落到目标项目 | 作用 |
 |---|---|---|
-| `skills/tsc/templates/enforcement/gate.yml` | `.github/workflows/gate.yml` | PR / 主干 push 上的 CI 门禁（含结构门禁步骤）；`branches:` 按 §2「主干分支」自动填 |
+| `skills/tsc/templates/enforcement/gate.yml` | `.github/workflows/gate.yml` | PR / 主干 push 上的 CI 门禁（含结构门禁步骤）；`branches:` 按 §2「主干分支」YAML-safe 渲染（特殊字符分支名走单引号流序列） |
 | `skills/tsc/templates/enforcement/.pre-commit-config.yaml` | 项目根（同名） | 本地 git 钩子：密钥扫描 + 提交信息规范 + 结构门禁（local 条目） |
-| `skills/tsc/templates/enforcement/commitlint.config.js` | 项目根 | Conventional Commits 规则 |
+| `skills/tsc/templates/enforcement/commitlint.config.js` | 项目根 | Conventional Commits 规则（**可选适配层**：仅 Node 项目且项目没有自己的 `.commitlintrc*` 等配置时部署） |
 | `skills/tsc/scripts/structure_guard.py` | `.agents/structure_guard.py` | 结构门禁落盘件：AI 代码结构完整性五层检查（括号/语法/缩进/形态） |
 | `skills/tsc/scripts/bracket_lint.py` | `.agents/bracket_lint.py` | 结构门禁的 L1 引擎（语言感知括号栈） |
 
 后两份来自技能目录的 `scripts/`（不在本目录）：git 钩子与 CI 只认项目自己的文件，结构门禁必须落盘进项目才能在闸 2/3 生效。**聚合门禁本体不落盘**——由技能目录里的 `scripts/tsc.py verify` 承担（执行逻辑不进项目，由 AI 直接调用）。
+
+## 安装 / 同步 / 回滚是一个事务
+
+install / sync 先算出完整变更计划，备份清单在改动任何项目文件**之前**落盘；写入或旧结构迁移任一步失败，自动恢复到事务开始前的状态（包括新建的目录），失败事务不留半成品备份；全部成功后备份清单才正式提交。`rollback` 撤销最近一次成功事务（含把迁移目录搬回原位）。所有写入与回滚路径都过统一安全检查（拒绝绝对路径、`..`、symlink/junction 逃逸）。
+
+## 结构门禁防假绿（--strict）
+
+`structure_guard` 的检查可能因文件数截断（>1000）、超大文件（>2MB 只查平衡）、工具缺席（无 node / PyYAML）、未知语言而**不完整**。落盘件里的门禁命令统一带 `--strict`：不完整 = 非零退出，绝不显示"全绿"；`--allow-missing-tools` 显式放行"工具缺席"这一类降级（截断 / 大文件 / 未知语言仍然拦）。本地手工跑不带 `--strict` 时只告警，但输出会明示"检查不完整"。
+
+行内豁免 `guard:skip` 只在**真实注释**里生效——写在字符串字面量里的 `guard:skip` 是数据，不是豁免。
 
 ## 归属规则（tsc-managed 标记）
 
@@ -46,12 +56,13 @@
 
 ```bash
 pip install pre-commit
-npm i -D @commitlint/cli @commitlint/config-conventional
+npm i -D @commitlint/cli @commitlint/config-conventional   # 仅部署了 commitlint 的 Node 项目
 ```
 
 - key 扫描的钩子由 pre-commit 自己管理，不用手动装 gitleaks。
 - 提交信息钩子用 `npx --no -- @commitlint/cli`，**只用本地已装依赖，不联网下载**。
   - ⚠️ 包名必须写 `@commitlint/cli`。写成 `commitlint` 会去下载一个不存在的包并直接失败，把提交堵死。
+- 项目用 pnpm / yarn / bun 时，commitlint entry 的 `npx` 按项目包管理器调整（doctor 会提示）。
 
 ### 2. 激活本地钩子
 

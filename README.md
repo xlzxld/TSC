@@ -16,7 +16,7 @@ TSC/
 │  ├─ references/               # AUDIT-SPEC.md（体检）/ BOOTSTRAP.md（项目探测填充）
 │  └─ commands/                 # 可选的斜杠命令（宿主支持命令文件时才生效）
 ├─ AGENTS.md                    # 本仓库自己的契约实例（母版在 skills/tsc/templates/AGENTS.md）
-├─ tests/unit  tests/e2e        # 快速单测（<10s）/ 端到端回归（<30s）
+├─ tests/unit  tests/e2e        # 快速单测（208 例，<5s）/ 端到端回归（53 例，<20s；全量 discovery 261 例，约 20s）
 ├─ CHANGELOG.md
 └─ .agents/                     # 本仓库自己的契约落盘件（project.py / VERSION / .source）
 ```
@@ -65,11 +65,16 @@ TSC/
 
 - 项目 `AGENTS.md` 带 `<!-- tsc-managed-contract:v4 -->` 标记 = TSC 托管，可随本体升级同步（§2 项目取值永不覆盖）。
 - **没有标记的外部 AGENTS.md 默认只读**：`sync`/`install` 拒绝接管并输出冲突摘要；仅 `install --force`（显式确认）接管。
-- 旧版（v3.x）部署的项目没有标记但有 `.agents/VERSION`：首次 `sync` 自动补标记、一次性升级——`.agents/.source`（无论指向多旧的上游、失效与否）都只是历史记录，绝不参与选源。
+- **legacy 识别需要 ≥2 个独立 TSC 历史特征**（合法历史版本号 + 部署痕迹如 `.agents/.source`、根目录旧契约文件、带 tsc-managed 标记的落盘检查器）。外部 AGENTS.md 恰好配了一个 `.agents/VERSION` 也**不会**被自动接管，按 foreign 处理；凑齐两个特征（典型 v3.x 部署）首次 `sync` 自动补标记、一次性升级。
+- **install/sync 是单事务**：先算完整变更计划，备份清单在改动任何项目文件**之前**落盘；写入、旧结构迁移任一步失败自动恢复到事务开始前状态（含新建目录），失败事务不留半成品备份；全部成功后备份清单才提交（committed）。`rollback` 撤销最近一次成功事务（含迁移搬回）；migration-only sync 同样有回滚记录。
+- **路径安全**：所有项目写入与回滚路径统一走安全解析——拒绝绝对路径、`..`、symlink/junction 逃逸；受管理路径（`.agents`、`AGENTS.md`、`.github/workflows/*`、`.pre-commit-config.yaml`、`commitlint.config.js`）不允许被链接重定向。rollback 在第一次写入前完整校验清单，路径非法整体拒绝，绝不恢复一半。
+- **上游完整校验**：必需产物清单（SKILL.md / VERSION / scripts / templates / references / commands）缺任一项、或版本格式/模板标记非法，install/sync 直接失败，零项目写盘。
+- **project.py 只做 AST 白名单解析**（`doctor`/`check-config`/`verify` 与 CI 内联壳同源）：只读 `FMT/LINT/TEST/BUILD_CMD` 与 `GATE_TIMEOUTS` 的常量；import、函数调用、属性访问一律拒绝——配置文件绝不被执行。
 - 执法包文件带 `tsc-managed` 标记随模板更新；被项目改掉标记的文件永不覆盖。
-- **纯 Python 等非 Node 项目不部署 commitlint、不引入任何 npm 依赖**（CI 的 commitlint 步骤只认 `commitlint.config.js` 是否存在）。
-- `verify` 的每条门禁命令都有超时（默认 600s，`--timeout` 或 project.py 的 `GATE_TIMEOUTS` 可调）：超时杀整个进程组，退出码 124，绝不无限等待。
-- install/sync 全程内存 journal，任一步写盘失败整体回滚；成功后留 `.agents/.tsc-backup/`，`rollback` 可撤销。
+- **结构门禁防假绿**：`--strict` 模式下文件截断、超大文件降级、未知语言、工具缺失（未显式 `--allow-missing-tools` 放行）都判非零——没真正查完不等于通过；本地人工模式只告警但明示"检查不完整"。
+- **commitlint 是可选适配层**：仅 Node 项目且项目没有自己的提交规范配置（`.commitlintrc*` 等）时部署；核心 TSC 不依赖 Node，纯 Python 项目零 npm 依赖；检测到 pnpm/yarn/bun 锁文件时提示按项目包管理器调整。
+- `gate.yml` 的 `branches:` 按 §2 主干分支名做 **YAML-safe 渲染**（含逗号、`]`、`#`、`{}`、空格、引号的合法分支名走单引号流序列，绝不裸插值）。
+- `verify` 的每条门禁命令都有超时（默认 600s，`--timeout` 或 project.py 的 `GATE_TIMEOUTS` 可调）：超时杀整个进程组，退出码 124，绝不无限等待。**`verify` 是执行型门禁**（真实运行 §2 命令），不是只读操作。
 
 ## CLI（供 CI / 手工兜底）
 
@@ -92,10 +97,11 @@ python3 "$SK/scripts/tsc.py" rollback    --project <项目根>   # 撤销最近�
 ## 维护本仓库（发版）
 
 1. 改 `skills/tsc/templates/AGENTS.md`（母版）与 `skills/tsc/scripts/`，bump `skills/tsc/VERSION`（版本发布唯一真源）。
-2. 在仓库根跑 `python3 skills/tsc/scripts/tsc.py sync --project .` 自举（生成 gitignore 掉的 `.agents/VERSION`/`.source`，根 AGENTS.md 与模板校验零漂移）。
-3. `CHANGELOG.md` 顶部记一笔。
-4. 门禁：`wc -l AGENTS.md` < 80；`python3 skills/tsc/scripts/tsc.py verify` 退出码 0（含 unit + e2e）。
-5. 提交走 Conventional Commits；标签用扁平名（`v5.0.0`）。
+2. **版本头注同步**：`templates/AGENTS.md`、根 `AGENTS.md`、`references/AUDIT-SPEC.md`、`references/BOOTSTRAP.md`、`templates/enforcement/README.md` 的"版本 vX"头注改成与 VERSION 一致，再 `git grep <旧版本号>` 确认除 CHANGELOG 外无残留（由 `test_version_single_source` 动态断言，漂移即红）。
+3. 在仓库根跑 `python3 skills/tsc/scripts/tsc.py sync --project .` 自举（生成 gitignore 掉的 `.agents/VERSION`/`.source`，根 AGENTS.md 与模板校验零漂移）。
+4. `CHANGELOG.md` 顶部记一笔。
+5. 门禁：`wc -l AGENTS.md` < 80；`python3 skills/tsc/scripts/tsc.py verify` 退出码 0（含 unit + e2e）。
+6. 提交走 Conventional Commits；标签用扁平名（`v5.2.0`）。
 
 ## 平台支持（如实记录）
 
@@ -107,6 +113,8 @@ python3 "$SK/scripts/tsc.py" rollback    --project <项目根>   # 撤销最近�
 ## 已知缺口（诚实登记）
 
 - 母版自带的多平台 CI（`ci.yml`）只覆盖**测试与门禁**；母版本身仍不部署自己的执法包（`gate.yml`）——那是刻意设计，避免出现第二份真身。两者文件名不同、互不干扰。
-- `tsc.py` 单文件约 1500 行，聚合了 CLI、所有权判定、配置比对、原子写、进程管理。当前取舍是"零依赖单文件最好分发"；若长期迭代，值得按数据模型 / 执行引擎 / 文件系统接口分层。
+- `tsc.py` 单文件约 1900 行，聚合了 CLI、所有权判定、事务执行、配置比对、原子写、进程管理。当前取舍是"零依赖单文件最好分发"。
 - Windows 超时终止依赖外部 `taskkill.exe`（不可用时退回单进程终止，超时结论不受影响）。理论上可换 Windows 原生 Job Object 做到零残留，属优化而非缺陷。
-- 插值内"引号没配对"这类**语法**错误由 L2（`node --check` / `ast`）负责，L1 刻意不报——报它会把合法 JSX 文案里的撇号误伤。`node` 缺席时该层降级放行，属已知限制。
+- 插值内"引号没配对"这类**语法**错误由 L2（`node --check` / `ast`）负责，L1 刻意不报——报它会把合法 JSX 文案里的撇号误伤。`node` 缺席时该层降级（`--strict --allow-missing-tools` 下放行，其余严格模式拦下）。
+- `gofmt` 等外部检查器的判定以退出码为准（stderr 仅诊断）；个别工具"退出码 0 但 stderr 报错"的极端形态不在拦截范围内。
+- guard:skip 豁免的注释上下文判定是单行词法：跨行字符串中间某一行的 `# guard:skip` 不会误判为注释（问题行本身不会出现在字符串内部，实际影响面为零，如实登记）。

@@ -190,6 +190,9 @@ PROFILES = {
         line=["#"],
         block=[("<#", "#>")],
         strings=_S_PS1,
+        # PowerShell 的转义符是反引号 `，不是反斜杠（收官体检 A-04①：
+        # 按 \ 转义会把合法的 `" 误报成未闭合串，把非法的 \" 放行）
+        esc="`",
     ),
     "plain": dict(
         line=["//", "#", "--"],
@@ -327,6 +330,7 @@ class Scanner:
         return False
 
     def _try_string(self) -> bool:
+        esc_char = self.p.get("esc", "\\")  # 转义符按语言 profile（PS 是 `，其余默认 \）
         for op, cl, esc, multi, report in self.p["strings"]:
             if not self.src.startswith(op, self.i):
                 continue
@@ -335,7 +339,7 @@ class Scanner:
             closed = False
             while k < self.n:
                 ch = self.src[k]
-                if esc and ch == "\\":
+                if esc and ch == esc_char:
                     k += 2
                     continue
                 if self.src.startswith(cl, k):

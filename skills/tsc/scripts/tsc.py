@@ -25,7 +25,7 @@
     --source <路径>  显式上游（本地技能目录），默认=本脚本所在技能根
     --from <路径>    同 --source（旧名兼容）
     --project <路径> 目标项目根（默认当前目录）
-    --dry-run        只报告将发生的变化，不写任何文件
+    --dry-run        只报告将发生的变化，不写任何文件（完全零写盘）
     --force          install 时确认接管外部 AGENTS.md
     --timeout <秒>   verify 每条门禁命令 / update 网络操作的超时（默认 600）
     --json           status / doctor 输出 JSON
@@ -33,21 +33,32 @@
 
 退出码：
     0    成功 / 已是最新
-    1    需要人工处理（§2 结构变更、外部 AGENTS.md 未接管、§2 与 project.py 不一致）
-    2    IO / 编码 / 权限错误
-    3    状态非法（缺 §2、缺 VERSION、上游无效、门禁全未配置、无可回滚记录、本体不可 git 更新）
+    1    需要人工处理（§2 结构变更、外部 AGENTS.md 未接管、§2 与 project.py 不一致、
+         update 的 git 操作失败需人工解决）
+    2    IO / 编码 / 权限错误（含事务失败已自动回滚、回滚清单损坏/未彻底）
+    3    状态非法（缺 §2、缺 VERSION、上游无效、门禁全未配置、无可回滚记录、
+         project.py 含白名单外的可执行结构、路径越界、rollback/update 传 --dry-run）
     124  门禁命令超时被终止
 
 设计约束：
     - 零第三方依赖，仅用标准库。
     - 所有文本读写强制 UTF-8 与 LF，避免 Windows 默认 CRLF 破坏行数门禁口径。
     - 上游来源只接受本地路径（已安装的本体本身就是上游）；不联网（update 除外）。
-    - 绝不自动删除文件；旧结构只做"移动 + 提示"（rollback 删除的仅限上次 apply 新建的文件）。
+    - install / sync 是**单事务**：先算完整 mutation plan，备份清单在实际写盘前
+      先落盘为临时文件，写入 / 旧结构迁移任一步失败自动恢复原状，全部成功后才
+      以 os.replace 提交备份清单（committed）；失败事务不留半成品备份。
+    - 所有项目写入与回滚路径统一过 safe_project_path：拒绝绝对路径、`..`、
+      symlink 逃逸；rollback 在第一次写入前完整校验 manifest，绝不恢复一半。
+    - .agents/project.py 一律 AST 安全解析（白名单常量），绝不 exec。
+    - 绝不自动删除文件；旧结构只做"移动 + 提示"（rollback 删除的仅限上次事务
+      新建的文件）。
     - 执法包（enforcement）默认随 install 落盘；带 tsc-managed 标记的才托管更新。
-    - Node/JS 项目才部署 commitlint；纯 Python 项目绝不引入 npm 依赖。
+    - commitlint 是**可选执法适配层**：仅 Node 项目且项目自己没有提交规范配置时
+      才部署；核心 TSC 不依赖 Node，纯 Python 项目绝不引入 npm 依赖。
 """
 
 import argparse
+import ast
 import json
 import os
 import re
@@ -78,7 +89,31 @@ TEMPLATE_AGENTS = "templates/AGENTS.md"
 TEMPLATE_PROJECT_EXAMPLE = "templates/project.example.py"
 ENFORCE_SUBDIR = "templates/enforcement"
 
-# 执法包模板 → 落地位置。commitlint 仅 Node/JS 项目部署（见 NODE_ONLY_ENFORCE）。
+# 上游（技能本体）必需产物清单：install/sync/status/doctor 都按它做完整校验。
+# 缺任一必要文件 => 拒绝开始，绝不产生项目写盘（防"残缺上游"半升级）。
+REQUIRED_UPSTREAM = [
+    "SKILL.md",
+    VERSION_FILE,
+    SCRIPT_SUBDIR + "/tsc.py",
+    SCRIPT_SUBDIR + "/structure_guard.py",
+    SCRIPT_SUBDIR + "/bracket_lint.py",
+    SCRIPT_SUBDIR + "/install_hook.py",
+    TEMPLATE_AGENTS,
+    TEMPLATE_PROJECT_EXAMPLE,
+    ENFORCE_SUBDIR + "/gate.yml",
+    ENFORCE_SUBDIR + "/.pre-commit-config.yaml",
+    ENFORCE_SUBDIR + "/commitlint.config.js",
+    ENFORCE_SUBDIR + "/README.md",
+    "references/AUDIT-SPEC.md",
+    "references/BOOTSTRAP.md",
+    "commands/tsc.md",
+    "commands/tsc-update.md",
+    "commands/tsc-status.md",
+    "commands/tsc-sync.md",
+]
+VERSION_FORMAT = re.compile(r"^\d+\.\d+\.\d+$")
+
+# 执法包模板 → 落地位置。commitlint 是 Node 项目的可选适配层（见 commitlint_wanted）。
 ENFORCE_DEPLOY = {
     ENFORCE_SUBDIR + "/gate.yml": ".github/workflows/gate.yml",
     ENFORCE_SUBDIR + "/.pre-commit-config.yaml": ".pre-commit-config.yaml",
@@ -86,9 +121,21 @@ ENFORCE_DEPLOY = {
     SCRIPT_SUBDIR + "/structure_guard.py": ".agents/structure_guard.py",
     SCRIPT_SUBDIR + "/bracket_lint.py": ".agents/bracket_lint.py",
 }
-# 只属于 Node/JS 项目的执法件：非 Node 项目一律不部署。
+# 只属于 Node/JS 项目的执法件（且项目自己没有提交规范配置时才部署）。
 NODE_ONLY_ENFORCE = {ENFORCE_SUBDIR + "/commitlint.config.js"}
 NODE_MANIFEST = "package.json"
+# 项目已有提交规范配置的任何一种形态 => 尊重现状，不部署 TSC 的 commitlint 适配层。
+COMMITLINT_CONFIG_FILES = (
+    "commitlint.config.js", "commitlint.config.cjs", "commitlint.config.mjs",
+    "commitlint.config.json", ".commitlintrc", ".commitlintrc.json",
+    ".commitlintrc.js", ".commitlintrc.cjs", ".commitlintrc.mjs",
+    ".commitlintrc.yml", ".commitlintrc.yaml",
+)
+PM_LOCKFILES = {
+    "pnpm-lock.yaml": "pnpm",
+    "yarn.lock": "yarn",
+    "bun.lockb": "bun",
+}
 
 # 执法包归属标记：带此标记 = 技能托管，可随上游模板更新；删掉标记再改 = 项目接管，永不覆盖。
 MANAGED_MARKER = "tsc-managed"
@@ -143,7 +190,8 @@ NODE_REGION_END = "# tsc:end:node-only"
 # sync 的内容比对按同一套渲染逻辑算，所以能自愈。
 PRE_COMMIT_INTERPRETERS = ("python3", "python")   # 探测顺序 = 优先级
 PRE_COMMIT_GUARD_ENTRY = ("python3 .agents/structure_guard.py "
-                          "--staged --quiet --color never")
+                          "--staged --strict --allow-missing-tools "
+                          "--quiet --color never")
 
 
 def pick_precommit_interpreter():
@@ -157,6 +205,8 @@ DEFAULT_TIMEOUT_S = 600
 
 # 门禁超时可在项目 project.py 里按步覆盖：GATE_TIMEOUTS = {"TEST_CMD": 300}
 GATE_TIMEOUTS_KEY = "GATE_TIMEOUTS"
+# project.py 里允许读取的配置白名单（AST 解析，绝不 exec）。
+CONFIG_KEYS = ("FMT_CHECK_CMD", "LINT_CMD", "TEST_CMD", "BUILD_CMD", "GATE_TIMEOUTS")
 
 PLACEHOLDER = "[自动填充]"
 
@@ -217,6 +267,74 @@ def write_text_atomic(path, text, dry_run=False):
         except OSError:
             pass  # 清理失败不得掩盖原始错误——原始异常在下方原样抛出
         raise
+
+
+# --------------------------------------------------------------------------- #
+# 路径安全：所有项目写入 / 回滚路径的唯一入口
+# --------------------------------------------------------------------------- #
+class UnsafeProjectPath(Exception):
+    """路径越出项目根、含 ..、是绝对路径、或经 symlink 逃逸/重定向。"""
+
+
+def safe_project_path(proj_root, rel):
+    """把"项目根相对路径"安全解析为绝对路径。
+
+    规则（全部满足才放行）：
+    - 必须是非空相对路径；拒绝绝对路径（含 Windows 盘符）；
+    - 拒绝任何 `..` 段（含嵌套、`..` 变体）；
+    - resolve 后必须仍在项目根内（堵死 symlink/junction 指向项目外的逃逸）；
+    - 从项目根到目标的任何路径组件都不得是 symlink（受管理路径
+      `.agents` / `AGENTS.md` / `.github/workflows/*` 等绝不允许被 symlink 重定向）。
+    返回 (未解析目标, resolve 后绝对路径)；不安全时抛 UnsafeProjectPath。
+    """
+    rel = str(rel)
+    unified = rel.replace("\\", "/")
+    if not unified:
+        raise UnsafeProjectPath("空路径")
+    if unified.startswith("/") or re.match(r"^[A-Za-z]:", unified):
+        raise UnsafeProjectPath("绝对路径不允许：%s" % rel)
+    parts = [seg for seg in unified.split("/") if seg not in ("", ".")]
+    if not parts:
+        raise UnsafeProjectPath("路径没有实际组件：%s" % rel)
+    if any(seg == ".." for seg in parts):
+        raise UnsafeProjectPath("路径含 `..`：%s" % rel)
+    root = Path(proj_root).resolve()
+    target = root.joinpath(*parts)
+    resolved = target.resolve()
+    if resolved != root and root not in resolved.parents:
+        raise UnsafeProjectPath(
+            "resolve 后越出项目根（疑似 symlink 逃逸）：%s -> %s" % (rel, resolved))
+    for depth in range(1, len(parts) + 1):
+        ancestor = root.joinpath(*parts[:depth])
+        # is_symlink 只认真正的符号链接；Windows junction 要靠 realpath 对比抓——
+        # 两种"路径组件被重定向"的形态都不允许出现在受管理写入路径上
+        real = os.path.normcase(os.path.realpath(str(ancestor)))
+        if ancestor.is_symlink() or real != os.path.normcase(str(ancestor)):
+            raise UnsafeProjectPath(
+                "路径组件 %s 是 symlink/junction，拒绝经其写入（%s）" % (
+                    "/".join(parts[:depth]), rel))
+    return target, resolved
+
+
+def _ensure_parent(path):
+    """确保父目录存在，返回**本次新建**的目录列表（浅→深，供事务回滚逐层删除）。"""
+    path = Path(path)
+    to_make, cursor = [], path.parent
+    while not cursor.exists():
+        to_make.append(cursor)
+        cursor = cursor.parent
+    if to_make:
+        path.parent.mkdir(parents=True, exist_ok=True)
+    return list(reversed(to_make))  # 浅→深
+
+
+def _remove_empty_dirs_quietly(dirs):
+    """逆序（深→浅）删除空目录；遇到非空/失败即停（父目录必然也非空）。"""
+    for d in reversed(dirs):
+        try:
+            d.rmdir()
+        except OSError:
+            return
 
 
 # --------------------------------------------------------------------------- #
@@ -347,11 +465,26 @@ def find_upstream(explicit):
 
 
 def validate_upstream(root):
-    return [
-        name
-        for name in (VERSION_FILE, TEMPLATE_AGENTS, TEMPLATE_PROJECT_EXAMPLE)
-        if not (root / name).exists()
-    ]
+    """完整校验上游：必需产物存在性 + 关键内容格式。返回问题列表（空 = 通过）。
+
+    残缺上游（缺任一必要文件 / VERSION 格式非法 / 模板缺 §2 或所有权标记）
+    一律拒绝 install/sync，绝不产生项目写盘。
+    """
+    root = Path(root)
+    problems = [name for name in REQUIRED_UPSTREAM if not (root / name).is_file()]
+    if VERSION_FILE in problems:
+        return problems  # 连版本文件都没有，内容检查无意义
+    ver = read_text(root / VERSION_FILE).strip()
+    if not VERSION_FORMAT.match(ver):
+        problems.append("%s 版本格式非法：%r（应为 x.y.z）" % (VERSION_FILE, ver))
+    tpl = root / TEMPLATE_AGENTS
+    if tpl.is_file():
+        text = read_text(tpl)
+        if section2_span(text) is None:
+            problems.append("%s 缺少 §2 章节" % TEMPLATE_AGENTS)
+        if CONTRACT_MARKER_LINE not in text:
+            problems.append("%s 缺少所有权标记 %s" % (TEMPLATE_AGENTS, CONTRACT_MARKER_LINE))
+    return problems
 
 
 def upstream_version(root):
@@ -417,24 +550,60 @@ def source_record_current(proj_root, upstream, up_ver):
 
 
 # --------------------------------------------------------------------------- #
-# AGENTS.md 所有权：marker 决定一切，绝不凭"§2 长得像"认定所有权
+# AGENTS.md 所有权：marker 决定一切；legacy 必须凑齐 ≥2 个独立 TSC 历史特征
 # --------------------------------------------------------------------------- #
+def _tsc_version_evidence(proj_root):
+    """特征 A：.agents/VERSION 是合法的历史 TSC 版本号（x.y.z）。"""
+    vf = Path(proj_root) / AGENTS_DIR / VERSION_FILE
+    if not vf.is_file():
+        return False
+    return bool(VERSION_FORMAT.match(read_text(vf).strip()))
+
+
+def _tsc_deployment_evidence(proj_root):
+    """特征 B：除版本文件外的独立 TSC 部署痕迹（任一命中即可）。
+
+    单凭 `.agents/VERSION` 存在绝不认定 legacy——外部项目完全可能恰好有同名
+    文件。这里只认 TSC 自己留下的、外部项目不会"恰好"齐备的痕迹：
+    - .agents/.source（TSC install 必写的 provenance）；
+    - 根目录残留旧版契约文件（AUDIT-SPEC.md / BOOTSTRAP.md，v3 布局）；
+    - .agents/ 里带 tsc-managed 标记的落盘检查器（structure_guard / bracket_lint）。
+    §2 表格形状**不算**证据——长得像 TSC 的表格谁都能写，碰巧撞上不算部署。
+    """
+    proj_root = Path(proj_root)
+    agents_dir = proj_root / AGENTS_DIR
+    if (agents_dir / SOURCE_FILE).is_file():
+        return True
+    if any((proj_root / n).is_file() for n in LEGACY_FILE_ENTRIES):
+        return True
+    for name in ("structure_guard.py", "bracket_lint.py"):
+        p = agents_dir / name
+        if p.is_file():
+            try:
+                if has_marker(read_text(p), MANAGED_MARKER):
+                    return True
+            except OSError:
+                continue
+    return False
+
+
 def contract_ownership(proj_root):
     """判定项目 AGENTS.md 的所有权。
 
     返回：
         none        没有 AGENTS.md（全新接入）
-        managed     带"整行" tsc-managed-contract 标记（TSC 托管；正文里提及该字符串不算）
-        legacy      无标记，但 .agents/VERSION 是 TSC 部署的版本文件
-                    （旧版安装的项目；只允许一次性升级：重建时补上标记）
-        foreign     外部项目自己的 AGENTS.md（无标记、无 TSC 部署证据）——默认只读，不接管
+        managed     带"整行" tsc-managed-contract 标记（TSC 托管；正文提及该字符串不算）
+        legacy      无标记，但凑齐 ≥2 个独立 TSC 历史特征（合法历史版本号 + 部署痕迹）；
+                    只允许一次性升级：重建时补上标记
+        foreign     外部项目自己的 AGENTS.md（无标记、TSC 证据不足）——默认只读，
+                    不自动接管；凑不齐两个特征时一律按 foreign 处理
     """
     agents_md = Path(proj_root) / AGENTS_MD
     if not agents_md.is_file():
         return "none"
     if has_marker(read_text(agents_md), CONTRACT_MARKER):
         return "managed"
-    if (Path(proj_root) / AGENTS_DIR / VERSION_FILE).is_file():
+    if _tsc_version_evidence(proj_root) and _tsc_deployment_evidence(proj_root):
         return "legacy"
     return "foreign"
 
@@ -442,16 +611,44 @@ def contract_ownership(proj_root):
 OWNERSHIP_LABEL = {
     "none": "未接入",
     "managed": "TSC 托管（%s）" % CONTRACT_MARKER_LINE,
-    "legacy": "旧版 TSC 部署（缺所有权标记，首次 sync 会补上）",
+    "legacy": "旧版 TSC 部署（≥2 项 TSC 历史特征，首次 sync 会补上标记）",
     "foreign": "外部 AGENTS.md（非 TSC 托管，默认只读）",
 }
 
 
 # --------------------------------------------------------------------------- #
-# Node/JS 探测：只有 Node 项目才引入 commitlint 等 npm 依赖
+# Node/JS 探测：commitlint 只是可选执法适配层，绝不默认引入 npm 体系
 # --------------------------------------------------------------------------- #
 def is_node_project(proj_root):
     return (Path(proj_root) / NODE_MANIFEST).is_file()
+
+
+def commitlint_wanted(proj_root):
+    """是否应部署 TSC 的 commitlint 适配层。返回 (是否部署, 原因说明)。
+
+    仅当：项目是 Node 项目（有 package.json），**且**项目自己没有**其它形态**的
+    提交规范配置（.commitlintrc* 等）时才部署。`commitlint.config.js` 本身不在
+    这里判：它是执法包的一员，归属（托管 / legacy 升级 / 项目已接管）由
+    _enforce_actions 的三态规则统一管辖——被项目接管的文件走"内容已被项目改过"
+    的显式跳过，不会被这里静默略过。
+    """
+    if not is_node_project(proj_root):
+        return False, "非 Node 项目"
+    proj_root = Path(proj_root)
+    for name in COMMITLINT_CONFIG_FILES:
+        if name == "commitlint.config.js":
+            continue  # 执法包三态规则管辖（见 docstring）
+        if (proj_root / name).is_file():
+            return False, "项目已有提交规范配置 %s" % name
+    return True, "Node 项目且无自有提交规范配置"
+
+
+def detect_lockfile_pm(proj_root):
+    """项目已有的包管理器（按锁文件探测）；非 npm 返回名字，探测不到返回 None。"""
+    for lockfile, pm in PM_LOCKFILES.items():
+        if (Path(proj_root) / lockfile).is_file():
+            return pm
+    return None
 
 
 def strip_node_regions(text):
@@ -470,6 +667,25 @@ def strip_node_regions(text):
     return "\n".join(out)
 
 
+# gate.yml 的 branches 渲染：简单分支名保持原样（[main]），含逗号/]/#/{} /空格/
+# 引号等字符的合法分支名必须走 YAML 单引号流序列（' 内 '' 转义），绝不裸插值。
+_SIMPLE_BRANCH_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+
+
+def render_branches_entry(branch):
+    """把分支名渲染成 YAML flow sequence（branches: [...]）。"""
+    if _SIMPLE_BRANCH_RE.match(branch):
+        return "branches: [%s]" % branch
+    return "branches: ['%s']" % branch.replace("'", "''")
+
+
+def _branch_variants(branch):
+    """debranch 用：同一分支名在落盘件里可能出现过的全部写法。"""
+    if _SIMPLE_BRANCH_RE.match(branch):
+        return ("branches: [%s]" % branch,)
+    return ("branches: ['%s']" % branch.replace("'", "''"),)
+
+
 def enforce_template_content(rel_src, proj_root, upstream, merged_agents_text):
     """算出某执法模板落在该项目里的最终内容；模板不存在返回 None。"""
     src = Path(upstream) / rel_src
@@ -482,7 +698,7 @@ def enforce_template_content(rel_src, proj_root, upstream, merged_agents_text):
         if PLACEHOLDER in main_branch or main_branch in ("无", "—", ""):
             main_branch = None  # §2 占位或未填（如非 git 项目）→ 保持模板默认 [main]
     if rel_src.endswith("gate.yml") and main_branch:
-        content = content.replace("branches: [main]", "branches: [%s]" % main_branch)
+        content = content.replace("branches: [main]", render_branches_entry(main_branch))
     if not is_node_project(proj_root):
         # 非 Node 项目：剔除 Node 专属区块（commitlint 整文件已在部署清单里排除）
         content = strip_node_regions(content)
@@ -498,7 +714,7 @@ def enforce_template_content(rel_src, proj_root, upstream, merged_agents_text):
 
 
 # --------------------------------------------------------------------------- #
-# 旧结构迁移（只移动，不删除）
+# 旧结构迁移（只移动，不删除；进入同一事务）
 # --------------------------------------------------------------------------- #
 # 旧版契约把 AUDIT-SPEC.md / BOOTSTRAP.md / enforcement/ / test/ 散在项目根目录。
 # 其中 enforcement / test 是通用名，项目自己的同名目录绝不能误搬：
@@ -530,6 +746,24 @@ def detect_legacy(proj_root):
     return found
 
 
+def plan_legacy_moves(proj_root):
+    """把旧布局迁移算成 move 计划（不写盘）。返回 (moves, 同名冲突残留)。
+
+    moves: [(相对根的源, 相对根的目标)]；目标已存在的条目不搬、进残留列表。
+    搬移发生在事务里：失败自动逆序搬回，不留半截迁移。
+    """
+    proj_root = Path(proj_root)
+    moves, leftover = [], []
+    for name in detect_legacy(proj_root):
+        src = proj_root / name
+        dst = proj_root / AGENTS_DIR / name
+        if dst.exists():
+            leftover.append(src)
+            continue
+        moves.append((name, (Path(AGENTS_DIR) / name).as_posix()))
+    return moves, leftover
+
+
 def detect_skill_only_leftovers(proj_root):
     """项目 .agents/ 里残留的执行逻辑（现由技能目录统一提供）。只用于提示，不删除。
 
@@ -543,35 +777,6 @@ def detect_skill_only_leftovers(proj_root):
         pass
     agents_dir = proj_root / AGENTS_DIR
     return [n for n in SKILL_ONLY_LEFTOVERS if (agents_dir / n).exists()]
-
-
-def migrate_legacy(proj_root, dry_run):
-    """把根目录的旧布局搬进 .agents/。返回 (已移动, 建议人工处理)。
-
-    搬移中途失败时，先逆序搬回已完成的部分再抛错——调用方据此保证整体原状。
-    """
-    proj_root = Path(proj_root)
-    agents_dir = proj_root / AGENTS_DIR
-    moved, leftover = [], []
-    for name in detect_legacy(proj_root):
-        src = proj_root / name
-        dst = agents_dir / name
-        if dst.exists():
-            leftover.append(src)
-            continue
-        if not dry_run:
-            agents_dir.mkdir(parents=True, exist_ok=True)
-            try:
-                shutil.move(str(src), str(dst))
-            except OSError:
-                for s, d in reversed(moved):
-                    try:
-                        shutil.move(str(d), str(s))
-                    except OSError:
-                        pass  # 回滚自身的失败不得掩盖原始错误，原始异常原样抛出
-                raise
-        moved.append((src, dst))
-    return moved, leftover
 
 
 # --------------------------------------------------------------------------- #
@@ -682,8 +887,8 @@ def _enforce_actions(proj_root, upstream, merged_agents_text):
     - 不带标记但正文与模板一致（忽略标记行与 gate.yml 分支名）→ 旧版部署
       的文件，一次性升级为带标记的托管版；
     - 不带标记且正文不同 → 项目已接管，永不覆盖，只提示。
-    - commitlint.config.js 只在 Node/JS 项目部署；.pre-commit-config.yaml 的
-      Node 专属区块在非 Node 项目中剔除（Python-only 项目绝不引入 npm 依赖）。
+    - commitlint.config.js 只在"Node 项目且项目自己没有提交规范配置"时部署；
+      .pre-commit-config.yaml 的 Node 专属区块在非 Node 项目中剔除。
     返回 (新部署, 已更新, 跳过)。
     """
     proj_root = Path(proj_root)
@@ -707,12 +912,13 @@ def _enforce_actions(proj_root, upstream, merged_agents_text):
             if PLACEHOLDER in main_branch or main_branch in ("无", "—", ""):
                 main_branch = None
         if main_branch:
-            return text.replace("branches: [%s]" % main_branch, "branches: [main]")
+            for variant in _branch_variants(main_branch):
+                text = text.replace(variant, "branches: [main]")
         return text
 
     for rel_src, rel_dst in ENFORCE_DEPLOY.items():
-        if rel_src in NODE_ONLY_ENFORCE and not node:
-            continue  # Python-only 项目不部署 commitlint
+        if rel_src in NODE_ONLY_ENFORCE and not commitlint_wanted(proj_root)[0]:
+            continue  # 非目标项目不部署 commitlint（可选适配层）
         content = enforce_template_content(rel_src, proj_root, upstream, merged_agents_text)
         if content is None:
             continue
@@ -730,8 +936,10 @@ def _enforce_actions(proj_root, upstream, merged_agents_text):
                 update.append((rel_dst, content))
             continue
 
-        # 旧版部署的一次性迁移：正文一致（忽略标记行/分支名/Node 区块差异）→ 升级为托管版
-        if normalize(debranch(existing)) == normalize(strip_node_regions(template)):
+        # 旧版部署的一次性迁移：正文一致（忽略标记行/分支名/Node 区块差异）→ 升级为托管版。
+        # 两侧都剥 Node 区块再比——只剥右侧会让 Node 项目的旧部署文件永远判成
+        # "内容已被项目改过"，升级路径就此失效（收官体检 A-06）
+        if normalize(strip_node_regions(debranch(existing))) == normalize(strip_node_regions(template)):
             update.append((rel_dst, content))
             continue
 
@@ -741,17 +949,18 @@ def _enforce_actions(proj_root, upstream, merged_agents_text):
 
 
 def deploy_enforcement(proj_root, upstream, merged_agents_text, dry_run, journal=None):
-    """把执法包模板落到生效位置（gate.yml 的主干分支名跟随 §2）。
+    """把执法包模板落到生效位置（gate.yml 的主干分支名跟随 §2，YAML-safe 渲染）。
 
-    dry_run 只报告不写盘。journal 传入列表时，每个已写文件以
-    (路径, 原内容或 None=新文件) 记入，供调用方失败回滚。返回 (新部署, 已更新, 跳过) 三个名字列表。
+    供单测直接调用的底层落盘助手；生产路径（install/sync）走 do_apply 的统一事务，
+    每个写入都过 safe_project_path。返回 (新部署, 已更新, 跳过) 三个名字列表。
     """
+    proj_root = Path(proj_root)
     deploy, update, skip = _enforce_actions(proj_root, upstream, merged_agents_text)
     if not dry_run:
         for rel_dst, content in deploy + update:
-            dst = Path(proj_root) / rel_dst
+            dst, _ = safe_project_path(proj_root, rel_dst)
             original = read_text(dst) if dst.is_file() else None
-            dst.parent.mkdir(parents=True, exist_ok=True)
+            _ensure_parent(dst)
             write_text_atomic(dst, content)
             if journal is not None:
                 journal.append((dst, original))
@@ -762,46 +971,114 @@ def deploy_enforcement(proj_root, upstream, merged_agents_text, dry_run, journal
     )
 
 
+# --------------------------------------------------------------------------- #
+# install / sync 统一事务：plan → backup（先落盘）→ write → move → commit
+# --------------------------------------------------------------------------- #
 BACKUP_DIRNAME = ".tsc-backup"
+MANIFEST_NAME = "manifest.json"
+MANIFEST_TMP = "manifest.json.new"   # committed 之前只以临时文件存在
 
 
-def persist_backup(proj_root, journal, contract_ver):
-    """apply 全部成功后，把本次改动前的原状写成可回滚清单（单级：只留上一次）。"""
-    backup_dir = Path(proj_root) / AGENTS_DIR / BACKUP_DIRNAME
-    records = []
-    for dst, original in journal:
-        try:
-            rel = Path(dst).resolve().relative_to(Path(proj_root).resolve()).as_posix()
-        except ValueError:
-            continue  # 项目根之外的路径不进清单
-        records.append(
-            {
-                "path": rel,
-                "action": "modify" if original is not None else "create",
-                "content": original,
-            }
-        )
-    if not records:
-        return
-    manifest = {
+def _manifest_payload(proj_root, writes, moves, contract_ver):
+    """由事务 plan 生成可回滚清单（写入前状态 + 迁移记录）。"""
+    proj_root = Path(proj_root)
+    files = []
+    for rel, _content, original in writes:
+        files.append({
+            "path": rel,
+            "action": "modify" if original is not None else "create",
+            "content": original,
+        })
+    move_entries = [{"from": src, "to": dst} for src, dst in moves]
+    return {
+        "schema": 2,
         "contract_version": contract_ver,
         "backed_up_at": datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds"),
-        "files": records,
+        "files": files,
+        "moves": move_entries,
     }
-    backup_dir.mkdir(parents=True, exist_ok=True)
-    write_text_atomic(
-        backup_dir / "manifest.json",
-        json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
-    )
+
+
+def _undo_transaction(applied_writes, applied_moves, created_dirs):
+    """尽力恢复到事务开始前状态；单步失败只如实列出，不掩盖原始错误。"""
+    problems = []
+    for src, dst in reversed(applied_moves):
+        try:
+            shutil.move(str(dst), str(src))
+        except OSError as exc:
+            problems.append("迁移回滚失败 %s <- %s（%s）" % (src, dst, exc))
+    for dst, original in reversed(applied_writes):
+        try:
+            if original is None:
+                dst.unlink()
+            else:
+                write_text_atomic(dst, original)
+        except OSError as exc:
+            problems.append("写入回滚失败 %s（%s）" % (dst, exc))
+    _remove_empty_dirs_quietly(created_dirs)
+    return problems
+
+
+def _execute_transaction(proj_root, plan, contract_ver):
+    """执行完整事务。返回 (退出码, 回滚问题列表, 原始异常或 None)。
+
+    顺序：备份清单先落盘为临时文件 → 逐项写入 → 旧结构迁移 → os.replace 提交
+    （committed）。任一步失败：自动恢复到事务开始前状态、删除临时清单，绝不
+    留半成品备份/迁移。previous manifest 在提交前始终原样保留。
+    """
+    proj_root = Path(proj_root)
+    backup_dir = proj_root / AGENTS_DIR / BACKUP_DIRNAME
+    tmp_manifest = backup_dir / MANIFEST_TMP
+    manifest = _manifest_payload(proj_root, plan["writes"], plan["moves"], contract_ver)
+
+    created_dirs = []
+    applied_writes = []   # (绝对路径, 原内容或 None)
+    applied_moves = []    # (源, 目标)
+    try:
+        # 1) 备份先落盘：项目文件被改动前，可回滚清单必须已经准备好
+        created_dirs.extend(_ensure_parent(backup_dir))
+        backup_dir_existed = backup_dir.exists()
+        backup_dir.mkdir(parents=True, exist_ok=True)
+        if not backup_dir_existed:
+            created_dirs.append(backup_dir)  # 失败时连同空备份目录一并清掉
+        write_text_atomic(tmp_manifest,
+                          json.dumps(manifest, ensure_ascii=False, indent=2) + "\n")
+        # 2) 写入（全部过安全路径检查）
+        for rel, content, original in plan["writes"]:
+            dst, _ = safe_project_path(proj_root, rel)
+            created_dirs.extend(_ensure_parent(dst))
+            write_text_atomic(dst, content)
+            applied_writes.append((dst, original))
+        # 3) 旧结构迁移（与写入同一事务）
+        for rel_src, rel_dst in plan["moves"]:
+            src, _ = safe_project_path(proj_root, rel_src)
+            dst, _ = safe_project_path(proj_root, rel_dst)
+            created_dirs.extend(_ensure_parent(dst))
+            shutil.move(str(src), str(dst))
+            applied_moves.append((src, dst))
+        # 4) 提交：临时清单替换正式清单，事务自此 committed
+        os.replace(tmp_manifest, backup_dir / MANIFEST_NAME)
+    except OSError as exc:
+        # 先清掉本次事务的临时清单（半成品），再恢复项目原状——顺序不能反：
+        # 留着临时清单会把（空的）备份目录占住，新建目录就清不干净了
+        problems = []
+        try:
+            if tmp_manifest.exists():
+                tmp_manifest.unlink()
+        except OSError as exc2:
+            problems.append("清理临时备份清单失败（%s）" % exc2)
+        problems.extend(_undo_transaction(applied_writes, applied_moves, created_dirs))
+        return EXIT_IO, problems, exc
+    return EXIT_OK, [], None
 
 
 def do_apply(proj_root, upstream, dry_run, force):
-    """install / sync 共用的落地逻辑。返回退出码。
+    """install / sync 共用的落地逻辑（统一事务）。返回退出码。
 
     所有权规则（绝不凭 §2 形状认定所有权）：
     - 无 AGENTS.md          → 全新接入；
     - 带 contract marker    → 托管，按 TSC 规则更新托管内容；
-    - 旧版部署（无 marker 但有 .agents/VERSION）→ 一次性升级，重建时补 marker；
+    - 旧版部署（无 marker 但凑齐 ≥2 个 TSC 历史特征）→ 一次性升级，重建时补 marker；
     - 外部 AGENTS.md        → 拒绝写入；仅 install --force（显式接管）例外。
     """
     proj_root = Path(proj_root)
@@ -848,168 +1125,150 @@ def do_apply(proj_root, upstream, dry_run, force):
 
     local_ver = local_version(proj_root)
     up_ver = upstream_version(upstream)
-    legacy_pending = detect_legacy(proj_root)
+    example = upstream / TEMPLATE_PROJECT_EXAMPLE
+    legacy_moves, legacy_leftover = plan_legacy_moves(proj_root)
+    # commitlint 适配层判定必须在任何写盘前采样：部署后文件落地，再判定就会
+    # 把 tsc 自己写的 commitlint.config.js 误认成"项目已有配置"（口径漂移）
+    cl_wanted, cl_reason = commitlint_wanted(proj_root)
 
-    # 预计算将发生的写入（不落盘）。同步判据 = 逐项内容漂移，版本号只是展示信息：
-    # 上游改了内容但忘 bump 版本，sync 照样把差异写下去。
-    drift = []
+    # 2) 形成完整 mutation plan（零写盘）。写入项 = (相对路径, 新内容, 原内容/None)。
+    writes = []
     if not project_agents.is_file() or read_text(project_agents) != merged:
-        drift.append(AGENTS_MD)
+        writes.append((AGENTS_MD, merged,
+                       read_text(project_agents) if project_agents.is_file() else None))
     for rel, src in collect_payload(upstream):
         dst = proj_root / rel
-        if not dst.is_file() or read_text(dst) != read_text(src):
-            drift.append(rel.as_posix())
-    example = upstream / TEMPLATE_PROJECT_EXAMPLE
+        if dst.is_file() and read_text(dst) == read_text(src):
+            continue
+        writes.append((rel.as_posix(), read_text(src),
+                       read_text(dst) if dst.is_file() else None))
+    project_py_rel = (Path(AGENTS_DIR) / PROJECT_FILE).as_posix()
     if example.is_file() and not (proj_root / AGENTS_DIR / PROJECT_FILE).is_file():
-        drift.append((Path(AGENTS_DIR) / PROJECT_FILE).as_posix())
+        writes.append((project_py_rel, read_text(example), None))
     if not source_record_current(proj_root, upstream, up_ver):
-        drift.append((Path(AGENTS_DIR) / SOURCE_FILE).as_posix())
+        writes.append(
+            ((Path(AGENTS_DIR) / SOURCE_FILE).as_posix(),
+             json.dumps(_source_record_payload(upstream, up_ver), ensure_ascii=False, indent=2) + "\n",
+             (read_text(proj_root / AGENTS_DIR / SOURCE_FILE)
+              if (proj_root / AGENTS_DIR / SOURCE_FILE).is_file() else None)))
     deploy, update, enforce_skipped = _enforce_actions(proj_root, upstream, merged)
-    drift.extend(deploy)
-    drift.extend(update)
-    drift.extend(legacy_pending)
+    for rel_dst, content in deploy + update:
+        dst = proj_root / rel_dst
+        writes.append((rel_dst, content, read_text(dst) if dst.is_file() else None))
 
+    # 路径安全前置校验：plan 里任何一条路径越界/symlink 逃逸，整体拒绝
+    try:
+        for rel, _c, _o in writes:
+            safe_project_path(proj_root, rel)
+        for rel_src, rel_dst in legacy_moves:
+            safe_project_path(proj_root, rel_src)
+            safe_project_path(proj_root, rel_dst)
+    except UnsafeProjectPath as exc:
+        warn("拒绝执行：计划中的写入路径不安全（%s）。本次未写入任何文件。" % exc)
+        return EXIT_STATE
+
+    drift = [rel for rel, _c, _o in writes] + [rel_src for rel_src, _ in legacy_moves]
     if not force and not drift:
         say("已是最新：上游 v%s，逐项内容比对无漂移，无需变动。" % up_ver)
         for name, why in enforce_skipped:
             say("执法包跳过 %s（%s；项目已接管，技能不覆盖）。" % (name, why))
+        if legacy_leftover:
+            # 早退分支也不能吞掉迁移受阻信息（收官体检 A-10）
+            say("检测到旧结构，但目标位置已有同名项，无法自动迁移（请人工确认）：%s"
+                % "、".join(str(s.name) for s in legacy_leftover))
         return EXIT_OK
-    if legacy_pending:
-        say("检测到旧结构残留，继续执行迁移：%s" % "、".join(legacy_pending))
+    if legacy_moves:
+        say("检测到旧结构残留，继续执行迁移：%s" % "、".join(s for s, _ in legacy_moves))
 
-    # 2) 写盘（带内存日志：任一步失败，已写入的部分整体回滚为操作前原状）
-    journal = []  # (路径, 原内容；None 表示本操作新建的文件)
+    plan = {"writes": writes, "moves": legacy_moves}
+    # 本次事务是否部署 project.py（事务后文件必已存在，事后判断恒假——A-08① 改采样）
+    deploys_project_py = any(rel == project_py_rel for rel, _c, _o in writes)
 
-    def journal_write(dst, text, journal=journal, dry_run=dry_run):
-        dst = Path(dst)
-        original = read_text(dst) if dst.is_file() else None
-        write_text_atomic(dst, text, dry_run)
-        if not dry_run:
-            journal.append((dst, original))
+    # 3) dry-run：只报告，零写盘（连备份临时文件都不产生）
+    if dry_run:
+        say("上游来源：%s（v%s）" % (upstream, up_ver))
+        say("目标项目：%s" % proj_root)
+        say("版本变化：%s → %s" % (local_ver or "（未接入）", up_ver))
+        say("所有权：%s" % OWNERSHIP_LABEL[ownership])
+        say("模式：--dry-run，未写入任何文件")
+        for rel, _c, _o in writes:
+            say("  将更新 %s" % rel)
+        if legacy_moves:
+            say("旧结构将迁移到 .agents/：")
+            for src, dst in legacy_moves:
+                say("  %s → %s" % (src, dst))
+        for extra in legacy_leftover:
+            say("旧位置已存在同名文件，未处理（请人工确认）：%s" % extra)
+        for name in [n for n, _ in deploy]:
+            say("执法包新部署（将写入）：%s" % name)
+        for name in [n for n, _ in update]:
+            say("执法包已随技能模板更新（将写入）：%s（带 tsc-managed 标记）" % name)
+        for name, why in enforce_skipped:
+            say("执法包跳过 %s（%s；技能不覆盖项目接管的文件。）" % (name, why))
+        if deploys_project_py:
+            say("下一步：编辑 .agents/project.py，填入本项目自己的门禁命令。")
+        return EXIT_OK
 
-    def rollback_journal(journal=journal):
-        # 尽力恢复；单文件恢复失败只如实列出，不掩盖原始错误
-        problems = []
-        for dst, original in reversed(journal):
-            try:
-                if original is None:
-                    dst.unlink()
-                else:
-                    write_text_atomic(dst, original)
-            except OSError as exc:
-                problems.append("%s（%s）" % (dst, exc))
-        return problems
-
-    try:
-        changed = []
-        if not project_agents.is_file() or read_text(project_agents) != merged:
-            journal_write(project_agents, merged)
-            changed.append(AGENTS_MD)
-
-        for rel, src in collect_payload(upstream):
-            dst = proj_root / rel
-            if dst.is_file() and read_text(dst) == read_text(src):
-                continue
-            if not dry_run:
-                dst.parent.mkdir(parents=True, exist_ok=True)
-                journal_write(dst, read_text(src))
-            changed.append(rel.as_posix())
-
-        agents_dir = proj_root / AGENTS_DIR
-        # 模板从上游取（项目里不再留 project.example.py）
-        project_py = agents_dir / PROJECT_FILE
-        need_project_py = example.is_file() and not project_py.is_file()
-        # provenance 未记录当前上游/版本时重写（缺失 / 旧格式 / 换过显式 --source）
-        need_source = not source_record_current(proj_root, upstream, up_ver)
-        if need_project_py:
-            changed.append((Path(AGENTS_DIR) / PROJECT_FILE).as_posix())
-        if need_source:
-            changed.append((Path(AGENTS_DIR) / SOURCE_FILE).as_posix())
-        if not dry_run and (need_project_py or need_source):
-            agents_dir.mkdir(parents=True, exist_ok=True)
-            if need_project_py:
-                journal_write(project_py, read_text(example))
-            if need_source:
-                journal_write(
-                    agents_dir / SOURCE_FILE,
-                    json.dumps(_source_record_payload(upstream, up_ver), ensure_ascii=False, indent=2) + "\n",
-                )
-
-        # 执法包模板落盘（gate.yml 的分支名跟随 §2；归属由 tsc-managed 标记决定）
-        deployed, enforced_updated, enforced_skipped = deploy_enforcement(
-            proj_root, upstream, merged, dry_run, journal=journal
-        )
-
-    except PermissionError as exc:
-        problems = rollback_journal()
-        warn("写入失败（文件可能被占用），已回滚本次全部改动：%s" % exc)
+    # 4) 真实事务：备份 → 写入 → 迁移 → 提交；任一步失败自动恢复原状
+    code, problems, exc = _execute_transaction(proj_root, plan, up_ver)
+    if code != EXIT_OK:
+        warn("事务失败，已自动恢复到本次 install/sync 之前的状态（%s）。" % exc)
         for p in problems:
             warn("  回滚未彻底，请人工检查：%s" % p)
-        warn("请关闭占用该文件的应用后重试。")
-        return EXIT_IO
-    except OSError as exc:
-        problems = rollback_journal()
-        warn("写入失败，已回滚本次全部改动：%s" % exc)
-        for p in problems:
-            warn("  回滚未彻底，请人工检查：%s" % p)
-        return EXIT_IO
+        warn("处理完上述问题后可重试；上一次成功事务的回滚清单未受影响。")
+        return code
 
-    if not dry_run:
-        persist_backup(proj_root, journal, up_ver)
-
-    # 3) 旧结构迁移（放在所有写盘成功之后：失败也只是"目标未完成"，不会先搬走旧目录）
-    try:
-        moved, leftover = migrate_legacy(proj_root, dry_run)
-    except OSError as exc:
-        problems = rollback_journal()
-        warn("旧结构迁移失败，已回滚本次全部写入：%s" % exc)
-        for p in problems:
-            warn("  回滚未彻底，请人工检查：%s" % p)
-        return EXIT_IO
-
-    # 4) 汇报
+    # 5) 汇报
     say("上游来源：%s（v%s）" % (upstream, up_ver))
     say("目标项目：%s" % proj_root)
     say("版本变化：%s → %s" % (local_ver or "（未接入）", up_ver))
     say("所有权：%s" % OWNERSHIP_LABEL[ownership])
-    if dry_run:
-        say("模式：--dry-run，未写入任何文件")
-    if changed:
-        for name in changed:
-            say("  %s %s" % ("将更新" if dry_run else "已更新", name))
-    else:
-        say("无文件需要变动。")
-
-    if moved:
-        say("旧结构%s .agents/：" % ("将迁移到" if dry_run else "已迁移到"))
-        for src, dst in moved:
-            say("  %s → %s" % (src.name, dst.relative_to(proj_root).as_posix()))
-    for extra in leftover:
+    for rel, _c, _o in writes:
+        say("  已更新 %s" % rel)
+    if legacy_moves:
+        say("旧结构已迁移到 .agents/：")
+        for src, dst in legacy_moves:
+            say("  %s → %s" % (src, dst))
+    for extra in legacy_leftover:
         say("旧位置已存在同名文件，未处理（请人工确认）：%s" % extra)
 
+    deployed = [n for n, _ in deploy]
+    enforced_updated = [n for n, _ in update]
     if deployed:
-        say("执法包新部署（%s）：" % ("将写入" if dry_run else "已写入"))
+        say("执法包新部署（已写入）：")
         for name in deployed:
             say("  %s" % name)
     if enforced_updated:
-        say("执法包已随技能模板更新（%s）：" % ("将写入" if dry_run else "已写入"))
+        say("执法包已随技能模板更新（已写入）：")
         for name in enforced_updated:
             say("  %s（带 tsc-managed 标记，视为技能托管）" % name)
-    for name, why in enforced_skipped:
+    for name, why in enforce_skipped:
         say("执法包跳过 %s（%s；技能不覆盖项目接管的文件。如需对齐最新模板，"
             "请先自行备份再删掉该项目文件重跑 install）。" % (name, why))
 
-    if not dry_run:
-        if is_node_project(proj_root):
-            say("Node 项目：commitlint 已随执法包部署。启用本地钩子前先装依赖：")
-            say("  npm i -D @commitlint/cli @commitlint/config-conventional")
+    if is_node_project(proj_root):
+        if cl_wanted:
+            say("Node 项目：commitlint 已随执法包部署。")
+            say("  启用本地钩子前先装依赖：npm i -D @commitlint/cli @commitlint/config-conventional")
         else:
-            say("未检测到 package.json：按非 Node 项目处理，不部署 commitlint、不引入任何 npm 依赖。")
-        say("本地钩子激活（可选，不想被拦就别执行）：pip install pre-commit && "
-            "pre-commit install && pre-commit install --hook-type commit-msg")
-        say("密钥扫描 / commitlint 的全量兜底在 CI（.github/workflows/gate.yml），无需本地依赖。")
-
-    if not (proj_root / AGENTS_DIR / PROJECT_FILE).is_file() and not dry_run:
+            say("Node 项目，%s：不部署 TSC 的 commitlint 适配层（尊重项目现状）。" % cl_reason)
+        pm = detect_lockfile_pm(proj_root)
+        if pm:
+            say("提示：检测到 %s 锁文件。pre-commit 的 commitlint entry 默认走 npx/npm，"
+                "请按项目实际包管理器调整。" % pm)
+    else:
+        say("未检测到 package.json：按非 Node 项目处理，不部署 commitlint、不引入任何 npm 依赖。")
+    say("本地钩子激活（可选，不想被拦就别执行）：pip install pre-commit && "
+        "pre-commit install && pre-commit install --hook-type commit-msg")
+    say("密钥扫描 / commitlint 的全量兜底在 CI（.github/workflows/gate.yml），无需本地依赖。")
+    if any(rel in ((Path(AGENTS_DIR) / VERSION_FILE).as_posix(),
+                   (Path(AGENTS_DIR) / SOURCE_FILE).as_posix())
+           for rel, _c, _o in writes):
+        # A-11：这两个部署生成物（.source 含本机路径）不提示 ignore，每个接入项目
+        # 都会常驻 2 个未跟踪文件
+        say("提示：.agents/VERSION 与 .agents/.source 是部署生成物（.source 含本机路径），"
+            "建议加入项目 .gitignore（或有意随仓库入库，二选一）。")
+    if deploys_project_py:
         say("下一步：编辑 .agents/project.py，填入本项目自己的门禁命令。")
 
     # 瘦身提示：项目里若留着旧版复制进来的执行逻辑，只提示、不删除（契约 R-3.4）
@@ -1039,22 +1298,92 @@ def _warn_foreign_summary(up_text, proj_text):
 
 
 # --------------------------------------------------------------------------- #
-# 聚合门禁（每条命令都有超时；超时杀整个进程组，绝不无限等待）
+# project.py：AST 安全解析（白名单常量；绝不 exec）
 # --------------------------------------------------------------------------- #
+def _ast_const_value(node, where):
+    """AST 表达式 -> Python 常量；一切可执行结构（调用/属性/名字/…）都拒绝。"""
+    if isinstance(node, ast.Constant):
+        value = node.value
+        if value is None or isinstance(value, (str, int, float, bool)):
+            return value, None
+        return None, "%s：不支持的常量类型 %s" % (where, type(value).__name__)
+    if isinstance(node, ast.Dict):
+        out = {}
+        for key, val in zip(node.keys, node.values):
+            if not (isinstance(key, ast.Constant) and isinstance(key.value, str)):
+                return None, "%s：字典键必须是字符串字面量" % where
+            item, err = _ast_const_value(val, where)
+            if err:
+                return None, err
+            out[key.value] = item
+        return out, None
+    if isinstance(node, (ast.List, ast.Tuple)):
+        out = []
+        for element in node.elts:
+            item, err = _ast_const_value(element, where)
+            if err:
+                return None, err
+            out.append(item)
+        return out, None
+    if isinstance(node, ast.Call):
+        return None, "%s：禁止函数调用" % where
+    if isinstance(node, ast.Attribute):
+        return None, "%s：禁止属性访问" % where
+    if isinstance(node, ast.Name):
+        return None, "%s：禁止变量引用（只允许字面量）" % where
+    return None, "%s：禁止表达式 %s" % (where, type(node).__name__)
+
+
+def parse_project_config(path):
+    """AST 解析 project.py，只取白名单配置。返回 (配置 dict 或 None, 错误信息)。
+
+    允许：模块 docstring、简单赋值（值只能是 None / 字符串 / 数字 / 布尔 /
+    字符串键字典 / 常量列表）。白名单外的常量赋值（如 __all__）允许但忽略。
+    禁止：import、函数调用、属性访问、变量引用、任意其他语句——配置文件绝不
+    被执行，夹带的代码一行也不会跑（doctor / check-config / verify / CI 同源）。
+    """
+    path = Path(path)
+    try:
+        tree = ast.parse(read_text(path), filename=str(path))
+    except (SyntaxError, ValueError) as exc:
+        return None, "%s 语法无法解析：%s" % (path, exc)
+    cfg = {}
+    for node in tree.body:
+        where = "%s 第 %d 行" % (path.name, getattr(node, "lineno", 0))
+        if isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant):
+            continue  # 模块 docstring
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            return None, "%s：project.py 禁止 import（配置只允许白名单常量，绝不执行）" % where
+        if isinstance(node, ast.Assign):
+            value, err = _ast_const_value(node.value, where)
+            if err:
+                return None, err
+            for target in node.targets:
+                if isinstance(target, ast.Name) and target.id in CONFIG_KEYS:
+                    cfg[target.id] = value
+            continue
+        return None, "%s：不允许的语句 %s（只允许简单赋值）" % (where, type(node).__name__)
+    timeouts = cfg.get(GATE_TIMEOUTS_KEY)
+    if timeouts is not None and not isinstance(timeouts, dict):
+        return None, "%s 必须是字典（如 {\"TEST_CMD\": 300}）" % GATE_TIMEOUTS_KEY
+    return cfg, None
+
+
 def load_project_config(proj_root):
+    """兼容旧调用名的薄封装：AST 安全解析 project.py。"""
     cfg_path = Path(proj_root) / AGENTS_DIR / PROJECT_FILE
     if not cfg_path.is_file():
         warn("找不到 %s，请先执行 install 或手工创建。" % cfg_path)
         return None
-    namespace = {"__file__": str(cfg_path)}
-    try:
-        exec(compile(read_text(cfg_path), str(cfg_path), "exec"), namespace)
-    except Exception as exc:  # noqa: BLE001 - 配置脚本语法错误必须显式暴露
-        warn("%s 无法执行：%s" % (cfg_path, exc))
-        return None
-    return namespace
+    cfg, err = parse_project_config(cfg_path)
+    if cfg is None:
+        warn("%s 无法加载（AST 白名单解析）：%s" % (cfg_path, err))
+    return cfg
 
 
+# --------------------------------------------------------------------------- #
+# 聚合门禁（每条命令都有超时；超时杀整个进程组，绝不无限等待）
+# --------------------------------------------------------------------------- #
 STEPS = [
     ("格式化 (Format)", "FMT_CHECK_CMD"),
     ("静态检查 (Lint)", "LINT_CMD"),
@@ -1167,7 +1496,20 @@ def cmd_verify(proj_root, timeout_override=None):
         if command in (None, "", "skip"):
             say("skip: %s（未配置）" % label)
             continue
-        timeout_s = timeout_override or per_step.get(key) or DEFAULT_TIMEOUT_S
+        if not isinstance(command, str):
+            # AST 白名单允许 list/int 等常量；不设防会在正则匹配处裸崩（最终审查 F-01）
+            warn("%s 的值必须是字符串或 None，当前是 %s——请修正 .agents/project.py。"
+                 % (key, type(command).__name__))
+            warn("门禁结论：配置非法（退出码 %d）" % EXIT_STATE)
+            return EXIT_STATE
+        raw_timeout = timeout_override or per_step.get(key) or DEFAULT_TIMEOUT_S
+        try:
+            timeout_s = max(1, int(raw_timeout))
+        except (TypeError, ValueError):
+            warn('%s["%s"] 的超时值 %r 无法解释为秒数——请修正 .agents/project.py。'
+                 % (GATE_TIMEOUTS_KEY, key, raw_timeout))
+            warn("门禁结论：配置非法（退出码 %d）" % EXIT_STATE)
+            return EXIT_STATE
         say("$ %s（超时 %ss）" % (command, timeout_s))
         code, timed_out = run_gate_command(command, proj_root, timeout_s)
         if timed_out:
@@ -1199,12 +1541,16 @@ def cmd_verify(proj_root, timeout_override=None):
 ROW_TO_KEY = {
     "格式化": "FMT_CHECK_CMD",
     "Format": "FMT_CHECK_CMD",
+    "format": "FMT_CHECK_CMD",
     "静态检查": "LINT_CMD",
     "Lint": "LINT_CMD",
+    "lint": "LINT_CMD",
     "测试": "TEST_CMD",
     "Test": "TEST_CMD",
+    "test": "TEST_CMD",
     "构建": "BUILD_CMD",
     "Build": "BUILD_CMD",
+    "build": "BUILD_CMD",
 }
 
 
@@ -1245,6 +1591,13 @@ def cmd_check_config(proj_root):
         warn("无法从 AGENTS.md 读出 §2 表格，检查中止。")
         return EXIT_STATE
 
+    if any(PLACEHOLDER in (v or "") for v in table.values()):
+        # §2 尚未适配：与 CI 内联壳同口径从严（check-config 绿必须意味着真同源，
+        # "跳过校验给 rc=0"是假绿——收官体检 A-04②）
+        warn("§2 仍是 %s 占位（项目未适配）：同源校验不通过。" % PLACEHOLDER)
+        warn("先按 BOOTSTRAP 探测填充 §2 与 .agents/project.py，再重跑本命令。")
+        return EXIT_MERGE
+
     mismatch = []
     for key in ("FMT_CHECK_CMD", "LINT_CMD", "TEST_CMD", "BUILD_CMD"):
         if key not in cfg:
@@ -1268,12 +1621,36 @@ def cmd_check_config(proj_root):
 # --------------------------------------------------------------------------- #
 # update：只更新技能本体（与项目 sync 严格分开）
 # --------------------------------------------------------------------------- #
+def _repo_tracks_skill(host_repo, skill_root):
+    """host_repo 这个 git 仓库是否真的收录了 skill_root（防止误 pull 宿主项目自己的仓库）。
+
+    `git_worktree_of` 只是逐级向上找第一个含 .git 的祖先——技能被装进
+    `<宿主项目>/.claude/skills/tsc` 这类位置时，找到的是**宿主项目自己的仓库**；
+    不加校验就 pull，等于替宿主项目执行了 git pull 还谎报"本体已是最新"
+    （收官体检 A-09）。判据：git ls-files 能在索引里找到本技能的 VERSION。
+    """
+    try:
+        rel = Path(skill_root).resolve().relative_to(Path(host_repo).resolve())
+    except ValueError:
+        return False
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(host_repo), "ls-files", "--error-unmatch",
+             rel.joinpath(VERSION_FILE).as_posix()],
+            capture_output=True, timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return proc.returncode == 0
+
+
 def cmd_update(timeout_s):
     root = upstream_root()
     old_ver = upstream_version(root) or "未知"
     host_repo = git_worktree_of(root)
-    if host_repo is None:
-        warn("当前安装副本不含 .git（不在任何 git 工作树里）——通常由宿主插件市场或压缩包安装，本脚本无从拉取。")
+    if host_repo is None or not _repo_tracks_skill(host_repo, root):
+        warn("技能目录不在任何收录它的 git 仓库里（未找到 .git，或所在仓库没有跟踪本技能）——")
+        warn("通常是宿主插件市场 / 压缩包 / 项目内嵌安装，本脚本无从拉取，也绝不 pull 宿主项目自己的仓库。")
         warn("本体更新请走宿主机制：打开宿主平台的插件/技能管理页，更新 tsc；")
         warn("或用 git clone / 市场重装修复后重试。项目契约不受影响，仍可 sync/verify。")
         return EXIT_STATE
@@ -1295,7 +1672,7 @@ def cmd_update(timeout_s):
         say(out)
     if proc.returncode != 0:
         warn("git pull 失败（退出码 %d）。请先在本体目录手工解决（冲突/网络/认证）后重试。" % proc.returncode)
-        return proc.returncode
+        return EXIT_MERGE  # 归一为契约退出码 1（需人工处理），不透传 git 原始码（A-08②）
     new_ver = upstream_version(root) or "未知"
     if new_ver == old_ver:
         say("本体已是最新：v%s（无版本变化）。" % old_ver)
@@ -1307,11 +1684,60 @@ def cmd_update(timeout_s):
 
 
 # --------------------------------------------------------------------------- #
-# rollback：恢复上一次 install/sync 写盘之前的项目契约状态
+# rollback：恢复上一次成功 install/sync 写盘之前的项目契约状态
 # --------------------------------------------------------------------------- #
+def _validated_manifest_actions(proj_root, manifest):
+    """先完整校验 manifest，再生成回滚动作清单。返回 (动作列表, 问题列表)。
+
+    动作生成的顺序与写入相反（先搬回迁移、再逆序还原/删除文件）。
+    任何一条路径非法（绝对路径 / `..` / 越出项目根 / symlink 组件 / 字段缺失），
+    整个回滚拒绝执行——绝不"恢复一半"。
+    """
+    proj_root = Path(proj_root)
+    problems, actions = [], []
+    files = manifest.get("files", [])
+    moves = manifest.get("moves", [])
+    if not isinstance(files, list) or not isinstance(moves, list):
+        return [], ["回滚清单结构非法（files/moves 不是列表）"]
+    for entry in moves:
+        if not isinstance(entry, dict):
+            problems.append("moves 含非对象条目：%r" % (entry,))
+            continue
+        src_rel, dst_rel = entry.get("from"), entry.get("to")
+        if not isinstance(src_rel, str) or not isinstance(dst_rel, str):
+            problems.append("moves 条目缺 from/to：%r" % (entry,))
+            continue
+        try:
+            src, _ = safe_project_path(proj_root, src_rel)
+            dst, _ = safe_project_path(proj_root, dst_rel)
+        except UnsafeProjectPath as exc:
+            problems.append("moves 路径非法（%s）：%r" % (exc, entry))
+            continue
+        actions.append(("move_back", src, dst))
+    for entry in reversed(files):
+        if not isinstance(entry, dict):
+            problems.append("files 含非对象条目：%r" % (entry,))
+            continue
+        rel = entry.get("path")
+        action = entry.get("action")
+        if not isinstance(rel, str) or action not in ("create", "modify"):
+            problems.append("files 条目非法：%r" % (entry,))
+            continue
+        if action == "modify" and not isinstance(entry.get("content"), str):
+            problems.append("modify 条目缺 content：%r" % (entry,))
+            continue
+        try:
+            target, _ = safe_project_path(proj_root, rel)
+        except UnsafeProjectPath as exc:
+            problems.append("files 路径非法（%s）：%r" % (exc, entry))
+            continue
+        actions.append(("restore", target, entry))
+    return actions, problems
+
+
 def cmd_rollback(proj_root):
     proj_root = Path(proj_root)
-    manifest_path = proj_root / AGENTS_DIR / BACKUP_DIRNAME / "manifest.json"
+    manifest_path = proj_root / AGENTS_DIR / BACKUP_DIRNAME / MANIFEST_NAME
     if not manifest_path.is_file():
         warn("没有可回滚的记录（%s 不存在）。" % manifest_path)
         warn("rollback 只能撤销最近一次 install/sync 的写入。")
@@ -1321,33 +1747,64 @@ def cmd_rollback(proj_root):
     except (ValueError, OSError) as exc:
         warn("回滚清单损坏，拒绝盲目恢复：%s" % exc)
         return EXIT_IO
-    problems = []
+    if not isinstance(manifest, dict):
+        warn("回滚清单结构非法（不是 JSON 对象），拒绝恢复。")
+        return EXIT_IO
+
+    # 第一次写入之前：完整校验整个 manifest
+    actions, problems = _validated_manifest_actions(proj_root, manifest)
+    if problems:
+        warn("回滚清单未通过完整校验，拒绝恢复（避免恢复一半）：")
+        for p in problems:
+            warn("  - %s" % p)
+        return EXIT_IO
+
     restored = []
-    for entry in reversed(manifest.get("files", [])):
-        target = proj_root / entry["path"]
+    for kind, a, b in actions:
         try:
-            if entry["action"] == "create":
-                if target.is_file():
-                    target.unlink()
-            else:
-                target.parent.mkdir(parents=True, exist_ok=True)
-                write_text_atomic(target, entry["content"])
-            restored.append((entry["action"], entry["path"]))
-        except (OSError, KeyError) as exc:
-            problems.append("%s（%s）" % (entry.get("path", "?"), exc))
+            if kind == "move_back":
+                # b(.agents/x) 搬回 a(根/x)；根位置若又被占用，如实报告不硬拆
+                if a.exists():
+                    problems.append("原位置已被占用，未搬回：%s" % a)
+                    continue
+                _ensure_parent(a)
+                shutil.move(str(b), str(a))
+                restored.append(("moved", a))
+            else:  # restore
+                entry = b
+                if entry["action"] == "create":
+                    if a.is_file():
+                        a.unlink()
+                else:
+                    _ensure_parent(a)
+                    write_text_atomic(a, entry["content"])
+                restored.append((entry["action"], a))
+        except OSError as exc:
+            problems.append("%s（%s）" % (a, exc))
+    if problems:
+        # 回滚未彻底：清单必须保留，否则用户连重试的机会都没有（收官体检 A-02）
+        for p in problems:
+            warn("  回滚未彻底，请人工检查：%s" % p)
+        warn("备份清单已保留（%s），处理完上述问题后可重试 rollback。" % manifest_path)
+        for action, target in restored:
+            say("  本次已%s %s" % ("删除（上次新建）" if action == "create" else
+                                  "搬回" if action == "moved" else "还原", target))
+        return EXIT_IO
     try:
         shutil.rmtree(manifest_path.parent)
     except OSError as exc:
-        problems.append("清理备份目录失败（%s）" % exc)
+        warn("清理备份目录失败（%s）——回滚本身已完成，只是清单残留。" % exc)
+        return EXIT_IO
     say("已回滚到 %s 之前的状态（契约版本 %s）。" % (
         manifest.get("backed_up_at", "上次同步"), manifest.get("contract_version", "未知")))
-    for action, rel in restored:
-        say("  %s %s" % ("已删除（上次新建）" if action == "create" else "已还原", rel))
-    if problems:
-        for p in problems:
-            warn("  回滚未彻底，请人工检查：%s" % p)
-        return EXIT_IO
-    say("注意：回滚只撤销最近一次 install/sync；之后项目里的手工修改会被还原内容覆盖。")
+    for action, target in restored:
+        if action == "create":
+            say("  已删除（上次新建）%s" % target)
+        elif action == "moved":
+            say("  已搬回 %s" % target)
+        else:
+            say("  已还原 %s" % target)
+    say("注意：回滚只撤销最近一次成功的 install/sync；之后项目里的手工修改会被还原内容覆盖。")
     return EXIT_OK
 
 
@@ -1395,7 +1852,13 @@ def cmd_status(proj_root, upstream, as_json=False):
     line("门禁可跑", "是" if project_py.is_file() else "否（缺 .agents/project.py）")
     legacy = detect_legacy(proj_root)
     if legacy:
-        line("检测到旧结构（跑 sync 会自动搬进 .agents/）", "、".join(legacy))
+        # 目标是否已被占用决定措辞：占位冲突时 sync 搬不动，不能承诺"会自动搬"（A-10）
+        _moves, legacy_blocked = plan_legacy_moves(proj_root)
+        if legacy_blocked:
+            line("检测到旧结构（目标位置已有同名项，sync 无法自动迁移，需人工确认）",
+                 "、".join(str(s.name) for s in legacy_blocked))
+        else:
+            line("检测到旧结构（跑 sync 会自动搬进 .agents/）", "、".join(legacy))
     stale = detect_skill_only_leftovers(proj_root)
     if stale:
         line("冗余执行逻辑（可自行删除，不影响功能）", "、".join(stale))
@@ -1423,7 +1886,7 @@ def cmd_doctor(proj_root, upstream, as_json=False):
         missing = validate_upstream(upstream)
         up_ver = upstream_version(upstream)
         if missing:
-            add("上游来源", "fail", "%s 不完整，缺少：%s" % (upstream, "、".join(missing)))
+            add("上游来源", "fail", "%s 不完整：%s" % (upstream, "；".join(missing)))
         else:
             add("上游来源", "ok", "%s（v%s）" % (upstream, up_ver))
     host_repo = git_worktree_of(upstream_root())
@@ -1465,20 +1928,33 @@ def cmd_doctor(proj_root, upstream, as_json=False):
     project_py = proj_root / AGENTS_DIR / PROJECT_FILE
     if not project_py.is_file():
         add("门禁命令源", "fail", "缺 .agents/project.py")
-    elif section2_filled:
-        comparable, mismatch = _config_mismatches(proj_root)
-        if not comparable:
-            add("§2 ⇆ project.py", "fail", "；".join(mismatch))
-        elif mismatch:
-            add("§2 ⇆ project.py", "fail", "不一致：%s" % "、".join(mismatch))
-        else:
-            add("§2 ⇆ project.py", "ok", "同源一致")
+    else:
+        cfg, err = parse_project_config(project_py)
+        if cfg is None:
+            add("门禁命令源", "fail", "project.py 无法通过 AST 白名单解析：%s" % err)
+        elif section2_filled:
+            comparable, mismatch = _config_mismatches(proj_root, cfg)
+            if not comparable:
+                add("§2 ⇆ project.py", "fail", "；".join(mismatch))
+            elif mismatch:
+                add("§2 ⇆ project.py", "fail", "不一致：%s" % "、".join(mismatch))
+            else:
+                add("§2 ⇆ project.py", "ok", "同源一致")
 
     node = is_node_project(proj_root)
     if node:
-        npm = shutil.which("npm")
-        add("项目类型", "ok" if npm else "warn",
-            "Node/JS（package.json）；commitlint 已部署" + ("" if npm else "，但 npm 不在 PATH（commitlint 钩子无法本地运行，CI 兜底）"))
+        wanted, reason = commitlint_wanted(proj_root)
+        if wanted:
+            npm = shutil.which("npm")
+            add("项目类型", "ok" if npm else "warn",
+                "Node/JS（package.json）；commitlint 适配层已部署"
+                + ("" if npm else "，但 npm 不在 PATH（commitlint 钩子无法本地运行，CI 兜底）"))
+        else:
+            add("项目类型", "ok", "Node/JS，%s：不部署 TSC commitlint 适配层" % reason)
+        pm = detect_lockfile_pm(proj_root)
+        if pm:
+            add("包管理器", "warn",
+                "检测到 %s 锁文件：pre-commit 的 commitlint entry 默认走 npx/npm，请按项目包管理器调整" % pm)
     else:
         add("项目类型", "ok", "非 Node 项目：不部署 commitlint，零 npm 依赖")
 
@@ -1487,7 +1963,7 @@ def cmd_doctor(proj_root, upstream, as_json=False):
     else:
         enforce_state = []
         for rel_src, rel_dst in ENFORCE_DEPLOY.items():
-            if rel_src in NODE_ONLY_ENFORCE and not node:
+            if rel_src in NODE_ONLY_ENFORCE and not commitlint_wanted(proj_root)[0]:
                 continue
             dst = proj_root / rel_dst
             if not dst.is_file():
@@ -1522,9 +1998,10 @@ def cmd_doctor(proj_root, upstream, as_json=False):
     return EXIT_OK if verdict == "ready" else EXIT_STATE
 
 
-def _config_mismatches(proj_root):
+def _config_mismatches(proj_root, cfg=None):
     """§2 与 project.py 同源校验（供 doctor 用）。返回 (是否可比较, mismatch 列表)。"""
-    cfg = load_project_config(proj_root)
+    if cfg is None:
+        cfg = load_project_config(proj_root)
     if cfg is None:
         return False, ["project.py 无法加载"]
     table = read_section2_values(proj_root)
@@ -1576,6 +2053,9 @@ def main(argv=None):
         return EXIT_STATE
     try:
         return _dispatch(args)
+    except UnsafeProjectPath as exc:
+        warn("拒绝执行：路径不安全（%s）。" % exc)
+        return EXIT_STATE
     except OSError as exc:
         # 顶层兜底：读盘 / 定位上游等未捕获的 IO 异常按契约归一为退出码 2
         warn("执行失败（IO / 权限 / 文件占用）：%s" % exc)
@@ -1583,6 +2063,15 @@ def main(argv=None):
 
 
 def _dispatch(args):
+    if args.dry_run and args.command in ("rollback", "update"):
+        # rollback 会真实改/删文件、update 会真实 git pull——静默忽略 --dry-run
+        # 曾让"预览"变"执行"（收官体检 A-03），这里显式拒绝而不是悄悄跑
+        warn("%s 不支持 --dry-run（%s）。要看当前状态请用 status / doctor。"
+             % (args.command,
+                "rollback 会真实还原/删除文件" if args.command == "rollback"
+                else "update 会真实执行 git pull"))
+        return EXIT_STATE
+
     if args.project:
         proj_root = Path(normalize_path_arg(args.project)).expanduser().resolve()
     else:
@@ -1603,7 +2092,9 @@ def _dispatch(args):
         upstream = find_upstream(args.source)
         missing = validate_upstream(upstream)
         if missing:
-            warn("上游不完整，缺少：%s" % "、".join(missing))
+            warn("上游不完整（必需产物缺失或格式非法），拒绝 install/sync：")
+            for item in missing:
+                warn("  - %s" % item)
             warn("上游路径：%s" % upstream)
             return EXIT_STATE
 

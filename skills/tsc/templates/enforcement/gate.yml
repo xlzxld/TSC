@@ -43,9 +43,11 @@ jobs:
       # 结构门禁：AI 生成代码的括号平衡/语法/缩进/调用形态五层检查（全仓）。
       # 检查器是 tsc-managed 落盘件 .agents/structure_guard.py（含 bracket_lint.py），
       # 随 tsc install / sync 自动更新——CI 够不着技能目录，所以它必须躺在项目里。
-      # 本层 fail-closed：退出码 1（代码问题）或 2（工具故障）都拦下。
+      # --strict：截断 / 降级 / 未知语言一律拦下（没真正查完 != 通过）；
+      # --allow-missing-tools：runner 缺 node / PyYAML 等工具时显式放行该类降级。
+      # 本层 fail-closed：退出码 1（代码问题）或 2（工具故障/检查不完整）都拦下。
       - name: 结构门禁 (structure_guard, 全仓)
-        run: python3 .agents/structure_guard.py --quiet --color never .
+        run: python3 .agents/structure_guard.py --strict --allow-missing-tools --quiet --color never .
 
       # 聚合门禁：读 .agents/project.py（唯一命令源），逐条执行（每条带超时）。
       # 内联实现而不是调 .agents/tsc.py——执行逻辑常驻技能目录、不进项目，
@@ -71,8 +73,70 @@ jobs:
           if not cfg.is_file():
               print("找不到 .agents/project.py，门禁无法执行", file=sys.stderr)
               sys.exit(3)
-          ns = {"__file__": str(cfg.resolve())}
-          exec(compile(cfg.read_text(encoding="utf-8"), str(cfg), "exec"), ns)
+
+          # 配置加载：AST 安全解析（与本地 tsc.py parse_project_config 同源）。
+          # 绝不 exec——CI 决不执行仓库里任何文件夹带的代码；只认白名单常量
+          # （FMT/LINT/TEST/BUILD_CMD 与 GATE_TIMEOUTS），import / 函数调用 /
+          # 属性访问 / 变量引用一律按非法配置退出 3。
+          CFG_KEYS = {"FMT_CHECK_CMD", "LINT_CMD", "TEST_CMD", "BUILD_CMD", "GATE_TIMEOUTS"}
+          import ast as _ast
+          def const_value(node, where):
+              if isinstance(node, _ast.Constant):
+                  v = node.value
+                  if v is None or isinstance(v, (str, int, float, bool)):
+                      return v, None
+                  return None, "%s：不支持的常量类型" % where
+              if isinstance(node, _ast.Dict):
+                  out = {}
+                  for k, val in zip(node.keys, node.values):
+                      if not (isinstance(k, _ast.Constant) and isinstance(k.value, str)):
+                          return None, "%s：字典键必须是字符串字面量" % where
+                      item, err = const_value(val, where)
+                      if err:
+                          return None, err
+                      out[k.value] = item
+                  return out, None
+              if isinstance(node, (_ast.List, _ast.Tuple)):
+                  out = []
+                  for el in node.elts:
+                      item, err = const_value(el, where)
+                      if err:
+                          return None, err
+                      out.append(item)
+                  return out, None
+              if isinstance(node, _ast.Call):
+                  return None, "%s：禁止函数调用" % where
+              if isinstance(node, _ast.Attribute):
+                  return None, "%s：禁止属性访问" % where
+              if isinstance(node, _ast.Name):
+                  return None, "%s：禁止变量引用（只允许字面量）" % where
+              return None, "%s：禁止表达式 %s" % (where, type(node).__name__)
+          try:
+              tree = _ast.parse(cfg.read_text(encoding="utf-8"), filename=str(cfg))
+          except (SyntaxError, ValueError) as e:
+              print(".agents/project.py 语法无法解析：%s" % e, file=sys.stderr)
+              sys.exit(3)
+          ns = {}
+          for node in tree.body:
+              where = "project.py 第 %d 行" % getattr(node, "lineno", 0)
+              if isinstance(node, _ast.Expr) and isinstance(node.value, _ast.Constant):
+                  continue  # 模块 docstring
+              if isinstance(node, (_ast.Import, _ast.ImportFrom)):
+                  print("%s：project.py 禁止 import（配置只允许白名单常量，绝不执行）" % where,
+                        file=sys.stderr)
+                  sys.exit(3)
+              if isinstance(node, _ast.Assign):
+                  value, err = const_value(node.value, where)
+                  if err:
+                      print(".agents/project.py 无法通过 AST 白名单解析：%s" % err, file=sys.stderr)
+                      sys.exit(3)
+                  for t in node.targets:
+                      if isinstance(t, _ast.Name) and t.id in CFG_KEYS:
+                          ns[t.id] = value
+                  continue
+              print("%s：不允许的语句 %s（只允许简单赋值）" % (where, type(node).__name__),
+                    file=sys.stderr)
+              sys.exit(3)
 
           # 同源校验：AGENTS.md §2 与 .agents/project.py 必须一致。
           # 判定逻辑与本地 `tsc.py check-config` 同源（两套执行壳，一个命令源）。
@@ -138,8 +202,11 @@ jobs:
                   if cells[0].startswith(prefix) and key not in table:
                       table[key] = cells[1]
           if any("[自动填充]" in v for v in table.values()):
-              # §2 尚未适配（项目还没填）：跳过同源校验，让"零门禁 rc=3"给出更可行动的信号
-              print("§2 仍是 [自动填充] 占位（项目未适配），跳过同源校验")
+              # §2 尚未适配（项目还没填）：按"未配置不是通过"判 rc=1（与本地
+              # tsc.py check-config 同口径——check-config 绿必须意味着真同源）
+              print("§2 仍是 [自动填充] 占位（项目未适配）：同源校验不通过。"
+                    "先按 BOOTSTRAP 填充 §2 与 .agents/project.py。", file=sys.stderr)
+              sys.exit(1)
           else:
               mismatch = []
               for key in ("FMT_CHECK_CMD", "LINT_CMD", "TEST_CMD", "BUILD_CMD"):
@@ -183,13 +250,27 @@ jobs:
               if raw_command in (None, "", "skip"):
                   print(f"skip: {label}（未配置）")
                   continue
+              # 与本地 tsc.py verify 同口径（最终审查 F-01）：AST 白名单允许 list/int 等
+              # 常量值，不设防会在正则匹配处裸崩，破坏退出码契约
+              if not isinstance(raw_command, str):
+                  print(f"{key} 的值必须是字符串或 None，当前是 {type(raw_command).__name__}"
+                        "——请修正 .agents/project.py。门禁结论：配置非法（退出码 3）",
+                        file=sys.stderr)
+                  sys.exit(3)
               command = retarget(raw_command)
-              timeout_s = per_step.get(key) or DEFAULT_TIMEOUT_S
+              raw_timeout = per_step.get(key) or DEFAULT_TIMEOUT_S
+              try:
+                  timeout_s = max(1, int(raw_timeout))
+              except (TypeError, ValueError):
+                  print(f'GATE_TIMEOUTS["{key}"] 的超时值 {raw_timeout!r} 无法解释为秒数'
+                        "——请修正 .agents/project.py。门禁结论：配置非法（退出码 3）",
+                        file=sys.stderr)
+                  sys.exit(3)
               print(f"$ {command}（超时 {timeout_s}s）")
               kwargs = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if os.name == "nt" else {"start_new_session": True}
               proc = subprocess.Popen(command, shell=True, cwd=".", **kwargs)
               try:
-                  proc.communicate(timeout=max(1, int(timeout_s)))
+                  proc.communicate(timeout=timeout_s)
                   code = proc.returncode
               except subprocess.TimeoutExpired:
                   if os.name == "nt":
