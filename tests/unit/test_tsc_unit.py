@@ -508,16 +508,19 @@ class GitWorktreeTests(unittest.TestCase):
         """技能目录是仓库子目录时，worktree 解析要落回仓库根。
 
         用临时布局断言——干净 clone / 无 .git 的副本环境同样成立（verify 在
-        干净仓库必须稳定退出 0，不能依赖本机仓库恰好带着 .git）。"""
+        干净仓库必须稳定退出 0，不能依赖本机仓库恰好带着 .git）。
+        期望值必须同样 resolve()：git_worktree_of 返回解析后的绝对路径，
+        而 mkdtemp 的原始路径在 macOS（/var -> /private/var symlink）与
+        Windows（8.3 短名 vs 长名）上与之不等——CI 实测抓到过。"""
         import shutil
         tmp = Path(tempfile.mkdtemp(prefix="tsc-wt-"))
         self.addCleanup(shutil.rmtree, tmp, True)
         (tmp / ".git").mkdir()
         skill = tmp / "skills" / "tsc"
         skill.mkdir(parents=True)
-        self.assertEqual(tsc.git_worktree_of(skill), tmp)
+        self.assertEqual(tsc.git_worktree_of(skill), tmp.resolve())
         if (REPO / ".git").exists():  # 真实仓库是 git 安装时一并校验
-            self.assertEqual(tsc.git_worktree_of(SKILL), REPO)
+            self.assertEqual(tsc.git_worktree_of(SKILL), REPO.resolve())
 
     def test_plain_dir_has_no_worktree(self):
         import shutil
