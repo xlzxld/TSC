@@ -1408,6 +1408,41 @@ class VerifyConfigTypeAuditTests(unittest.TestCase):
         self.assertEqual(rc, tsc.EXIT_OK, out)
 
 
+class DoctorUpdateChannelAuditTests(unittest.TestCase):
+    """最终审查收尾：doctor 的"本体更新通道"必须与 cmd_update 的收录校验同口径
+    （技能内嵌宿主 git 仓库但未被跟踪时，不得说"update 可直接 pull"）。"""
+
+    def test_vendored_skill_in_untracked_git_repo_warns(self):
+        import shutil
+        from unittest import mock
+        tmp = Path(tempfile.mkdtemp(prefix="tsc-doc-"))
+        self.addCleanup(shutil.rmtree, tmp, True)
+        (tmp / ".git").mkdir()
+        # 用真函数的真实行为：tmp 这个仓库没有跟踪 SKILL/VERSION
+        with mock.patch.object(tsc, "upstream_root", return_value=SKILL), \
+             mock.patch.object(tsc, "git_worktree_of", return_value=tmp):
+            import io
+            from contextlib import redirect_stdout
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                tsc.cmd_doctor(tmp, upstream=None, as_json=False)
+        out = buf.getvalue()
+        self.assertIn("未被其收录", out)
+        self.assertNotIn("可直接 pull", out)
+
+    def test_tracked_repo_still_ok(self):
+        # 本仓库（跟踪了技能 VERSION）：走 ok 分支——防修复把正常路径改坏
+        if (REPO / ".git").exists() and tsc._repo_tracks_skill(REPO, SKILL):
+            import io
+            from contextlib import redirect_stdout
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                tsc.cmd_doctor(REPO, upstream=SKILL, as_json=False)
+            self.assertIn("可直接 pull", buf.getvalue())
+        else:
+            self.skipTest("本仓库不是收录技能的 git 安装，跳过 ok 分支校验")
+
+
 if __name__ == "__main__":
     unittest.main()
 
